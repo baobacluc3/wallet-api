@@ -15,13 +15,13 @@ export class Transfer {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @ManyToOne(() => Wallet, (wallet) => wallet.sentTransfers)
+  @ManyToOne(() => Wallet, (wallet) => wallet.sent_transfers)
   @JoinColumn({ name: 'from_wallet_id' })
-  fromWallet: Wallet;
+  from_wallet: Wallet;
 
-  @ManyToOne(() => Wallet, (wallet) => wallet.receivedTransfers)
+  @ManyToOne(() => Wallet, (wallet) => wallet.received_transfers)
   @JoinColumn({ name: 'to_wallet_id' })
-  toWallet: Wallet;
+  to_wallet: Wallet;
 
   @OneToMany(() => Transaction, (transaction) => transaction.transfer)
   transactions: Transaction[];
@@ -36,5 +36,5 @@ export class Transfer {
   reference: string;
 
   @CreateDateColumn()
-  createdAt: Date;
+  created_at: Date;
 }

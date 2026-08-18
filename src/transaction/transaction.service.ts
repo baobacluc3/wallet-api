@@ -1,26 +1,41 @@
 import { Injectable } from '@nestjs/common';
-import { CreateTransactionDto } from './dto/create-transaction.dto';
-import { UpdateTransactionDto } from './dto/update-transaction.dto';
+import { DataSource } from 'typeorm';
+import { Wallet } from '../wallet/entities/wallet.entity';
+import { from } from 'rxjs';
 
 @Injectable()
 export class TransactionService {
-  create(createTransactionDto: CreateTransactionDto) {
-    return 'This action adds a new transaction';
-  }
+  constructor(private readonly datasource: DataSource) {}
 
-  findAll() {
-    return `This action returns all transaction`;
-  }
+  async transfer(from_wallet_id: number, to_wallet_id: number, amount) {
+    const queryRunner = this.datasource.createQueryRunner();
 
-  findOne(id: number) {
-    return `This action returns a #${id} transaction`;
-  }
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
-  update(id: number, updateTransactionDto: UpdateTransactionDto) {
-    return `This action updates a #${id} transaction`;
-  }
+    try {
+      const fromWallet = await queryRunner.manager.findOne(Wallet, {
+        where: { id: from_wallet_id },
+      });
+      const toWallet = await queryRunner.manager.findOne(Wallet, {
+        where: { id: to_wallet_id },
+      });
 
-  remove(id: number) {
-    return `This action removes a #${id} transaction`;
+      if (!fromWallet || !toWallet) throw new Error('wallet not found');
+      if (fromWallet.balance < amount) {
+        throw new Error('Insufficient balance');
+      }
+      fromWallet.balance -= amount;
+      toWallet.balance += amount;
+
+      await queryRunner.manager.save(fromWallet);
+      await queryRunner.manager.save(toWallet);
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+    } finally {
+      await queryRunner.release();
+    }
   }
 }

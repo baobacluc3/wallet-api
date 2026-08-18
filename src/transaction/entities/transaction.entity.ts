@@ -9,16 +9,36 @@ import {
 import { Wallet } from '../../wallet/entities/wallet.entity';
 import { Transfer } from '../../transfer/entities/transfer.entity';
 
+/*
+CREDIT         → money added to wallet
+DEBIT          → money removed from wallet
+TRANSFER_IN    → money received from another wallet
+TRANSFER_OUT   → money sent to another wallet
+*/
+
+export enum TransactionType {
+  CREDIT = 'CREDIT',
+  DEBIT = 'DEBIT',
+  TRANSFER_IN = 'TRANSFER_IN',
+  TRANSFER_OUT = 'TRANSFER_OUT',
+}
+
+export enum TransactionStatus {
+  PENDING = 'PENDING',
+  COMPLETED = 'COMPLETED',
+  FAILED = 'FAILED',
+}
+
 @Entity('transactions')
 export class Transaction {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column()
-  walletId: number;
-
-  @Column()
-  type: string;
+  @Column({
+    type: 'enum',
+    enum: TransactionType,
+  })
+  type: TransactionType;
 
   @Column()
   amount: number;
@@ -29,10 +49,14 @@ export class Transaction {
   @Column()
   balance_after: number;
 
-  @Column()
-  status: string;
+  @Column({
+    type: 'enum',
+    enum: TransactionStatus,
+  })
+  status: TransactionStatus;
 
   @ManyToOne(() => Wallet, (wallet) => wallet.transactions)
+  @JoinColumn({ name: 'wallet_id' })
   wallet: Wallet;
 
   @ManyToOne(() => Transfer, (transfer) => transfer.transactions)
@@ -40,5 +64,5 @@ export class Transaction {
   transfer: Transfer;
 
   @CreateDateColumn()
-  createdAt: Date;
+  created_at: Date;
 }
