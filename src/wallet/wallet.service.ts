@@ -30,6 +30,7 @@ export class WalletService {
         return { transaction: existing, wallet: existing.wallet };
       }
     }
+    return this.executeDeposit(dto);
   }
 
   private async executeDeposit(dto: DepositDto) {
@@ -65,21 +66,20 @@ export class WalletService {
         referenceId: dto.referenceId ?? null,
         idempotencyKey: dto.idempotencyKey ?? null,
       });
-      await queryRunner.manager.save(transaction);
+      const savedTransaction = await queryRunner.manager.save(transaction);
 
       await queryRunner.commitTransaction();
       this.logger.log(
         `Deposit completed: wallet=${wallet.id} amount=${dto.amountCents} tx=${transaction.id}`,
       );
-      return { wallet, transaction };
+      return { wallet, transaction: savedTransaction };
     } catch (error) {
       await queryRunner.rollbackTransaction();
-      if (error instanceof Error) {
-        this.logger.error(
-          `Deposit failed for wallet ${dto.walletId}: ${error.message}`,
-        );
-        throw error;
-      }
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `Deposit failed for wallet ${dto.walletId}: ${message}`,
+      );
+      throw error;
     } finally {
       await queryRunner.release();
     }
