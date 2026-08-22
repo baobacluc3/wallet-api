@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { Wallet } from '../wallet/entities/wallet.entity';
-import { from } from 'rxjs';
 
 @Injectable()
 export class TransactionService {

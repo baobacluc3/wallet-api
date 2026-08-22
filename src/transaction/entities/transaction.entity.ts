@@ -55,6 +55,12 @@ export class Transaction {
   })
   status: TransactionStatus;
 
+  @Column({ nullable: true, unique: true })
+  idempotencyKey?: string | null;
+
+  @Column({ nullable: true, length: 64 })
+  referenceId?: string | null;
+
   @ManyToOne(() => Wallet, (wallet) => wallet.transactions)
   @JoinColumn({ name: 'wallet_id' })
   wallet: Wallet;
