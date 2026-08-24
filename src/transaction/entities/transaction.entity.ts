@@ -37,7 +37,7 @@ export class Transaction {
   id: number;
 
   @Column({
-    type: 'enum',
+    type: 'text',
     enum: TransactionType,
   })
   type: TransactionType;
@@ -52,15 +52,15 @@ export class Transaction {
   balance_after: number;
 
   @Column({
-    type: 'enum',
+    type: 'text',
     enum: TransactionStatus,
   })
   status: TransactionStatus;
 
-  @Column({ nullable: true, unique: true })
+  @Column({ type: 'text', nullable: true, unique: true })
   idempotencyKey?: string | null;
 
-  @Column({ nullable: true, length: 64 })
+  @Column({ type: 'text', nullable: true, length: 64 })
   referenceId?: string | null;
 
   @ManyToOne(() => Wallet, (wallet) => wallet.transactions)
