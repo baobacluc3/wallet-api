@@ -29,6 +29,9 @@ export class Transfer {
   @Column()
   amount: number;
 
+  @Column({ unique: true })
+  idempotencyKey: string;
+
   @Column()
   status: string;
 

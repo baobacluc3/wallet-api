@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
@@ -30,6 +31,7 @@ export enum TransactionStatus {
 }
 
 @Entity('transactions')
+@Index(['wallet', 'created_at']) // composite index matches the WHERE + ORDER BY exactly
 export class Transaction {
   @PrimaryGeneratedColumn()
   id: number;
