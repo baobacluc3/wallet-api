@@ -1,4 +1,3 @@
-// wallets.controller.ts
 import {
   Controller,
   Post,
@@ -21,7 +20,6 @@ export class WalletsController {
 
   @Post('deposit')
   @HttpCode(HttpStatus.OK)
-  //Takes the request body and puts it into dto.
   async deposit(@Body() dto: DepositDto) {
     const result = await this.walletService.deposit(dto);
     return {

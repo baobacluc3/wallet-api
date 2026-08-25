@@ -53,13 +53,6 @@ export class WalletService {
     await queryRunner.startTransaction('READ COMMITTED');
 
     try {
-      // Client sends the same request twice -> idempotencyKey;
-      // finds a wallet and locks it for writing.
-      // Deposit + withdraw happen simultaneously -> pessimistic_write lock
-      // Wallet updates but transaction record fails -> Database transaction + rollback
-      // Money calculation has decimals -> Store integer cents at dto level
-      // Balance changes without explanation -> Create a Transaction record
-
       const wallet = await queryRunner.manager
         .createQueryBuilder(Wallet, 'wallet')
         .setLock('pessimistic_write')
@@ -69,8 +62,8 @@ export class WalletService {
         throw new NotFoundException(`Wallet ${dto.walletId} not found`);
       }
       wallet.balance += dto.amountCents;
-      wallet.version += 1; //version is a number used to track how many times a wallet has been changed.It's mainly for optimistic locking.
-      await queryRunner.manager.save(wallet); //save the changes to the database.
+      wallet.version += 1;
+      await queryRunner.manager.save(wallet);
 
       const transaction = queryRunner.manager.create(Transaction, {
         wallet: wallet,
@@ -101,24 +94,30 @@ export class WalletService {
 
   async withdraw(dto: WithdrawDto) {
     const queryRunner = this.dataSource.createQueryRunner();
+
     await queryRunner.connect();
-    await queryRunner.startTransaction();
+    await queryRunner.startTransaction('READ COMMITTED');
 
-    if (dto.idempotencyKey) {
-      const existing = await queryRunner.manager.findOne(Transaction, {
-        where: { idempotencyKey: dto.idempotencyKey },
-      });
-
-      if (existing) {
-        await queryRunner.rollbackTransaction();
-        return {
-          wallet: existing.wallet,
-          transactionId: existing.id,
-          replayed: true,
-        };
-      }
-    }
     try {
+      // 1. Check idempotency
+      if (dto.idempotencyKey) {
+        const existing = await queryRunner.manager.findOne(Transaction, {
+          where: { idempotencyKey: dto.idempotencyKey },
+          relations: { wallet: true },
+        });
+
+        if (existing) {
+          await queryRunner.rollbackTransaction();
+
+          return {
+            walletId: existing.wallet.id,
+            transactionId: existing.id,
+            replayed: true,
+          };
+        }
+      }
+
+      // 2. Lock wallet
       const wallet = await queryRunner.manager.findOne(Wallet, {
         where: { id: dto.walletId },
         lock: { mode: 'pessimistic_write' },
@@ -128,26 +127,35 @@ export class WalletService {
         throw new NotFoundException('Wallet not found');
       }
 
+      // 3. Check balance
       if (wallet.balance < dto.amount) {
         throw new BadRequestException('Insufficient funds');
       }
 
+      // 4. Update balance
       wallet.balance -= dto.amount;
+
       await queryRunner.manager.save(wallet);
 
-      const transaction = await queryRunner.manager.create(Transaction, {
+      // 5. Create transaction record
+      const transaction = queryRunner.manager.create(Transaction, {
         wallet: wallet,
         type: TransactionType.DEBIT,
         amount: dto.amount,
         status: TransactionStatus.COMPLETED,
+        idempotencyKey: dto.idempotencyKey ?? null,
       });
 
       await queryRunner.manager.save(transaction);
+
+      // 6. Commit
       await queryRunner.commitTransaction();
+
       return {
         walletId: wallet.id,
         newBalance: wallet.balance,
         transactionId: transaction.id,
+        replayed: false,
       };
     } catch (error) {
       await queryRunner.rollbackTransaction();
