@@ -170,6 +170,19 @@ export class AuthService {
     }
   }
 
+  async logout(
+    userId: number,
+    rawRefreshToken: string,
+    jti: string,
+    exp: number,
+  ) {
+    const tokenHash = hashToken(rawRefreshToken);
+    await this.refreshTokenRepository.update(
+      { tokenHash, userId },
+      { revoked: true, revokedAt: new Date() },
+    );
+  }
+
   private async logEvent(
     type: AuthEventType,
     userId: number,
