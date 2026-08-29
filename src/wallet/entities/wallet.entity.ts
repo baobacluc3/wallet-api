@@ -21,6 +21,9 @@ export class Wallet {
   balance: number;
 
   @Column()
+  userId:number;
+
+  @Column()
   currency: string;
 
   @VersionColumn()

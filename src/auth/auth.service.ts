@@ -16,8 +16,11 @@ import { JwtService } from '@nestjs/jwt';
 import { generateOpaqueToken, hashToken } from './utils/token.util';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { LoginDto } from './dto/login.dto';
-import { ExternalContextCreator } from '@nestjs/core';
 import type { RequestContext } from './decorators/client-context.decorator';
+import { ConfigService } from '@nestjs/config';
+import { RedisService } from '../redis/redis.service';
+
+class JwtPayload {}
 
 @Injectable()
 export class AuthService {
@@ -34,7 +37,22 @@ export class AuthService {
     @InjectRepository(RefreshToken)
     private refreshTokenRepository: Repository<RefreshToken>,
     @InjectDataSource() private dataSource: DataSource,
-  ) {}
+    private configService: ConfigService,
+    private redisService: RedisService,
+  ) {
+    this.maxFailedAttempts = Number(
+      this.configService.get('AUTH_MAX_FAILED_ATTEMPTS', 5),
+    );
+    this.lockoutMinutes = Number(
+      this.configService.get('AUTH_LOCKOUT_MINUTES', 15),
+    );
+    this.accessTokenTtl = Number(
+      this.configService.get('JWT_ACCESS_TOKEN_TTL', 900),
+    );
+    this.refreshTokenTtlDays = Number(
+      this.configService.get('JWT_REFRESH_TOKEN_TTL_DAYS', 30),
+    );
+  }
   async register(dto: RegisterDto, ctx: RequestContext) {
     const existing = await this.userRepository.findOne({
       where: { email: dto.email },
@@ -181,6 +199,32 @@ export class AuthService {
       { tokenHash, userId },
       { revoked: true, revokedAt: new Date() },
     );
+    const ttl = Math.max(exp - Math.floor(Date.now() / 1000), 0);
+    if (ttl > 0) {
+      await this.redisService.set(`bl:${jti}`, '1', ttl);
+    }
+    await this.logEvent(AuthEventType.LOGOUT, userId, {
+      ip: '',
+      userAgent: '',
+    });
+  }
+
+  async logoutAll(userId: number) {
+    await this.refreshTokenRepository.update(
+      {
+        userId,
+        revoked: false,
+      },
+      { revoked: true, revokedAt: new Date() },
+    );
+    await this.logEvent(AuthEventType.LOGOUT_ALL, userId, {
+      ip: '',
+      userAgent: '',
+    });
+  }
+
+  decodeToken(token: string) {
+    return this.jwtService.decode(token) as JwtPayload & { exp: number,jti: string };
   }
 
   private async logEvent(
@@ -202,7 +246,7 @@ export class AuthService {
 
   private async issueTokenPair(user: User, ctx: RequestContext) {
     const jti = randomUUID();
-    const payload: JwtPayLoad = {
+    const payload: JwtPayload = {
       sub: user.id,
       email: user.email,
       role: user.role,

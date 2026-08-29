@@ -1,98 +1,135 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Auth module — integration guide
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+This drops into your existing NestJS + TypeORM wallet API. It's built around
+one core mechanism: **refresh token rotation with reuse detection**, using the
+same pessimistic-locking pattern you already used for wallet transfers.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
-
-## Description
-
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
+## 1. Install dependencies
 
 ```bash
-$ npm install
+npm install @nestjs/jwt @nestjs/passport passport passport-jwt argon2 @nestjs/throttler @nestjs/config ioredis
+npm install -D @types/passport-jwt
 ```
 
-## Compile and run the project
+## 2. Generate an RS256 key pair
 
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+openssl genrsa -out private.pem 2048
+openssl rsa -in private.pem -pubout -out public.pem
+base64 -i private.pem | tr -d '\n'   # → JWT_PRIVATE_KEY_BASE64
+base64 -i public.pem  | tr -d '\n'   # → JWT_PUBLIC_KEY_BASE64
 ```
 
-## Run tests
+Copy `.env.example` into your `.env` and fill in those two values, plus
+`REDIS_URL`. Delete the `.pem` files afterward — only the env vars should
+exist on disk.
+
+## 3. Merge the User entity changes
+
+`src/users/entities/user.entity.ts` here shows the four new columns
+(`role`, `isEmailVerified`, `failedLoginAttempts`, `lockedUntil`) and the
+`refreshTokens` relation. Merge these into your existing entity rather than
+overwriting it if you've already got other fields on there.
+
+## 4. Run the migration
+
+Copy `migrations/1735300000000-CreateAuthTables.ts` into your migrations
+folder (rename the timestamp if your CLI cares) and run it the same way you
+ran your wallet migrations:
 
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+npm run typeorm migration:run
 ```
 
-## Deployment
+## 5. Fix the Wallet import path
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+`auth.module.ts` and `wallet-owner.guard.ts` import
+`../wallets/entities/wallet.entity`. Point that at wherever your actual
+`Wallet` entity lives.
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+## 6. Wire up app.module.ts
+
+```ts
+import { RedisModule } from './redis/redis.module';
+import { AuthModule } from './auth/auth.module';
+
+@Module({
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true }),
+    // ...your existing TypeOrmModule.forRoot(...) etc.
+    RedisModule,
+    AuthModule,
+    // ...WalletsModule, etc.
+  ],
+})
+export class AppModule {}
+```
+
+## 7. Global validation + basic hardening in main.ts
+
+```ts
+import { ValidationPipe } from '@nestjs/common';
+import helmet from 'helmet';
+
+app.use(helmet());
+app.useGlobalPipes(
+  new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
+);
+```
+
+## 8. Protect the wallet endpoints
+
+Every route on your wallet controller is now guarded by default (the
+`JwtAuthGuard` is global). Add ownership checks on top for the wallet-specific
+routes:
+
+```ts
+@UseGuards(WalletOwnerGuard)
+@Get(':id/balance')
+getBalance(@Param('id') id: string) { ... }
+
+@UseGuards(WalletOwnerGuard)
+@Post(':id/withdraw')
+withdraw(@Param('id') id: string, @Body() dto: WithdrawDto) { ... }
+```
+
+For `/transfers`, check ownership of `fromWalletId` against `req.user.id`
+manually inside the service — the guard here only handles single `:id` routes.
+
+## 9. Smoke test
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+# Register
+curl -X POST localhost:3000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"a@test.com","password":"Passw0rd123","name":"A"}'
+
+# Login
+curl -X POST localhost:3000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"a@test.com","password":"Passw0rd123"}'
+
+# Use the access token
+curl localhost:3000/auth/me -H "Authorization: Bearer <accessToken>"
+
+# Rotate
+curl -X POST localhost:3000/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refreshToken":"<refreshToken>"}'
+
+# Replay the OLD refresh token again → should now revoke the whole session
+# family and return 401, since it's already been rotated away once.
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+## What's deliberately out of scope for now
 
-## Resources
+You chose core-only for this pass. The schema already supports these as a
+clean phase 2, without a redesign:
 
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+- **2FA (TOTP)** — add a `twoFactorSecret` column on `User` and a verify step
+  between login and token issuance.
+- **Google OAuth** — add a `GoogleStrategy`, link by email, issue the same
+  token pair `issueTokenPair` already produces.
+- **Session/device management** — you're already storing `ip` and
+  `userAgent` per refresh token. A `GET /auth/sessions` endpoint listing
+  active (non-revoked) tokens is mostly a `find()` away.

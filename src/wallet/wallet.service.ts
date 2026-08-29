@@ -14,10 +14,8 @@ import {
 import { DataSource, FindOptionsWhere, Repository } from 'typeorm';
 import { Wallet } from './entities/wallet.entity';
 import { WithdrawDto } from './dto/withdraw.dto';
-import { from, windowWhen } from 'rxjs';
 import { TransferDto } from './dto/transfer.dto';
 import { Transfer } from '../transfer/entities/transfer.entity';
-import { AppModule } from '../app.module';
 import { GetTransactionsDto } from '../transaction/dto/get-transactions.dto';
 
 @Injectable()
