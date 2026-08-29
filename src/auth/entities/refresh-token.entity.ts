@@ -28,7 +28,7 @@ export class RefreshToken {
   userId: number;
 
   @Column({ type: 'uuid', nullable: true })
-  replacedByTokenId: string | null;
+  replacedByTokenId: number | null;
 
   @Column({ default: false })
   revoked: boolean;

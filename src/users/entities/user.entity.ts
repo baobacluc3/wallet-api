@@ -31,4 +31,10 @@ export class User {
 
   @OneToMany(() => RefreshToken, (token) => token.user)
   refreshTokens: RefreshToken[];
+
+  @Column({ nullable: true })
+  lockedUntil: Date | null;
+
+  @Column({ type: 'int', default: 0 })
+  failedLoginAttempts: number;
 }
