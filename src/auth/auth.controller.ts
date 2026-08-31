@@ -6,7 +6,6 @@ import {
   HttpStatus,
   Post,
   Req,
-  UseGuards,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
@@ -17,7 +16,7 @@ import { Throttle } from '@nestjs/throttler';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { CurrentUser } from './decorators/current-user.decorator';
 import type { Request } from 'express';
-import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { LoginDto } from './dto/login.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -33,8 +32,8 @@ export class AuthController {
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  login(@Body() dto: RegisterDto, @ClientCtx() ctx: RequestContext) {
-    return this.authService.register(dto, ctx);
+  login(@Body() dto: LoginDto, @ClientCtx() ctx: RequestContext) {
+    return this.authService.login(dto, ctx);
   }
 
   @Public()
@@ -45,12 +44,14 @@ export class AuthController {
     return this.authService.refresh(dto.refreshToken, ctx);
   }
 
-  // Guarded (not @Public) so we get req.user, and so a request with no/expired
-  // access token still requires *something* valid to log out with.
-  @UseGuards(JwtAuthGuard)
+  // Not @Public: the global JwtAuthGuard authenticates this request and populates req.user.
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  logout(dto: RefreshTokenDto, @CurrentUser() user: any, @Req() req: Request) {
+  logout(
+    @Body() dto: RefreshTokenDto,
+    @CurrentUser() user: any,
+    @Req() req: Request,
+  ) {
     const authHeader = (req.headers.authorization ?? '').replace('Bearer ', '');
     const decoded = this.authService.decodeToken(authHeader);
     return this.authService.logout(
@@ -61,14 +62,12 @@ export class AuthController {
     );
   }
 
-  @UseGuards(JwtAuthGuard)
   @Post('logout-all')
   @HttpCode(HttpStatus.OK)
   logoutAll(@CurrentUser() user: any) {
     return this.authService.logoutAll(user.id);
   }
 
-  @UseGuards(JwtAuthGuard)
   @Get('me')
   me(@CurrentUser() user: any) {
     return user;

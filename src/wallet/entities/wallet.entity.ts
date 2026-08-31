@@ -20,8 +20,8 @@ export class Wallet {
   @Column()
   balance: number;
 
-  @Column()
-  userId:number;
+  @Column({ name: 'user_id' })
+  userId: number;
 
   @Column()
   currency: string;
