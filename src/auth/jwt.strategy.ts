@@ -14,10 +14,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: Buffer.from(
-        configService.getOrThrow<string>('JWT_PUBLIC_KEY_BASE64'),
-        'base64',
-      ),
+      // The app signs access tokens with JWT_SECRET in AuthModule, so validation
+      // must use the same HMAC secret rather than an unrelated asymmetric key.
+      secretOrKey: configService.getOrThrow<string>('JWT_SECRET'),
       algorithms: ['HS256'],
     });
   }

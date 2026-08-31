@@ -1,16 +1,13 @@
-import {
-  IsUUID,
-  IsInt,
-  Min,
-  IsOptional,
-  IsString,
-  Length,
-} from 'class-validator';
+import { IsInt, Min, IsOptional, IsString, Length } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class WithdrawDto {
-  @IsUUID()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
   walletId: number;
 
+  @Type(() => Number)
   @IsInt({ message: 'Amount must be an integer (cents)' })
   @Min(1, { message: 'Amount must be greater than zero' })
   amount: number;

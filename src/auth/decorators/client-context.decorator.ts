@@ -11,7 +11,7 @@ export const ClientCtx = createParamDecorator(
     const request = ctx.switchToHttp().getRequest<Request>();
     return {
       ip: request.ip ?? '',
-      userAgent: (request.header['user-agent'] as string) ?? '',
+      userAgent: (request.headers['user-agent'] as string) ?? '',
     };
   },
 );

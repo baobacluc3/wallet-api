@@ -7,12 +7,17 @@ import {
   Get,
   Param,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import { DepositDto } from './dto/deposit.dto';
 import { WalletService } from './wallet.service';
 import { WithdrawDto } from './dto/withdraw.dto';
 import { TransferDto } from './dto/transfer.dto';
 import { GetTransactionsDto } from '../transaction/dto/get-transactions.dto';
+import { WalletOwnerGuard } from '../auth/guards/wallet-owner.guard';
+import { WalletOwner } from '../auth/decorators/wallet-owner.decorator';
+import { IdempotencyKey } from '../common/decorators/idempotency-key.decorator';
+import { WalletIdPipe } from '../common/pipes/wallet-id.pipe';
 
 @Controller('wallets')
 export class WalletsController {
@@ -20,8 +25,13 @@ export class WalletsController {
 
   @Post('deposit')
   @HttpCode(HttpStatus.OK)
-  async deposit(@Body() dto: DepositDto) {
-    const result = await this.walletService.deposit(dto);
+  @UseGuards(WalletOwnerGuard)
+  @WalletOwner({ source: 'body', field: 'walletId' })
+  async deposit(
+    @Body() dto: DepositDto,
+    @IdempotencyKey() idempotencyKey: string,
+  ) {
+    const result = await this.walletService.deposit({ ...dto, idempotencyKey });
     return {
       walletId: result?.wallet.id,
       newBalanceCents: result?.wallet.balance,
@@ -31,25 +41,37 @@ export class WalletsController {
   }
 
   @Post('withdraw')
-  async withdraw(@Body() dto: WithdrawDto) {
-    return this.walletService.withdraw(dto);
+  @UseGuards(WalletOwnerGuard)
+  @WalletOwner({ source: 'body', field: 'walletId' })
+  async withdraw(
+    @Body() dto: WithdrawDto,
+    @IdempotencyKey() idempotencyKey: string,
+  ) {
+    return this.walletService.withdraw({ ...dto, idempotencyKey });
   }
 
   @Post('transfers')
-  async transfer(@Body() dto: TransferDto) {
-    return this.walletService.transfer(dto);
+  @UseGuards(WalletOwnerGuard)
+  @WalletOwner({ source: 'body', field: 'fromWalletId' })
+  async transfer(
+    @Body() dto: TransferDto,
+    @IdempotencyKey() idempotencyKey: string,
+  ) {
+    return this.walletService.transfer({ ...dto, idempotencyKey });
   }
 
   @Get(':id/transactions')
+  @UseGuards(WalletOwnerGuard)
   async getTransactions(
-    @Param('id') walletId: number,
+    @Param('id', WalletIdPipe) walletId: number,
     @Query() query: GetTransactionsDto,
   ) {
     return this.walletService.getTransactions(walletId, query);
   }
 
   @Get(':id/verify')
-  async verify(@Param('id') walletId: number) {
+  @UseGuards(WalletOwnerGuard)
+  async verify(@Param('id', WalletIdPipe) walletId: number) {
     return this.walletService.verifyBalance(walletId);
   }
 }

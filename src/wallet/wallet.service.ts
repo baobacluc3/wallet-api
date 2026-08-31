@@ -59,6 +59,7 @@ export class WalletService {
       if (!wallet) {
         throw new NotFoundException(`Wallet ${dto.walletId} not found`);
       }
+      const balanceBefore = wallet.balance;
       wallet.balance += dto.amountCents;
       wallet.version += 1;
       await queryRunner.manager.save(wallet);
@@ -67,6 +68,8 @@ export class WalletService {
         wallet: wallet,
         type: TransactionType.CREDIT,
         amount: dto.amountCents,
+        balance_before: balanceBefore,
+        balance_after: wallet.balance,
         status: TransactionStatus.COMPLETED,
         referenceId: dto.referenceId ?? null,
         idempotencyKey: dto.idempotencyKey ?? null,
@@ -131,6 +134,7 @@ export class WalletService {
       }
 
       // 4. Update balance
+      const balanceBefore = wallet.balance;
       wallet.balance -= dto.amount;
 
       await queryRunner.manager.save(wallet);
@@ -140,6 +144,8 @@ export class WalletService {
         wallet: wallet,
         type: TransactionType.DEBIT,
         amount: dto.amount,
+        balance_before: balanceBefore,
+        balance_after: wallet.balance,
         status: TransactionStatus.COMPLETED,
         idempotencyKey: dto.idempotencyKey ?? null,
       });
@@ -216,6 +222,8 @@ export class WalletService {
         throw new BadRequestException('Insufficient funds');
       }
 
+      const fromBalanceBefore = fromWallet.balance;
+      const toBalanceBefore = toWallet.balance;
       fromWallet.balance -= dto.amount;
       toWallet.balance += dto.amount;
 
@@ -224,22 +232,30 @@ export class WalletService {
       const transferRecord = queryRunner.manager.create(Transfer, {
         from_wallet: fromWallet,
         to_wallet: toWallet,
+        amount: dto.amount,
         status: 'COMPLETED',
         idempotencyKey: dto.idempotencyKey,
+        reference: dto.idempotencyKey,
       });
 
       await queryRunner.manager.save(transferRecord);
 
       const debitTxn = queryRunner.manager.create(Transaction, {
         wallet: fromWallet,
+        transfer: transferRecord,
         type: TransactionType.TRANSFER_OUT,
         amount: dto.amount,
+        balance_before: fromBalanceBefore,
+        balance_after: fromWallet.balance,
         status: TransactionStatus.COMPLETED,
       });
       const creditTxn = queryRunner.manager.create(Transaction, {
         wallet: toWallet,
+        transfer: transferRecord,
         type: TransactionType.TRANSFER_IN,
         amount: dto.amount,
+        balance_before: toBalanceBefore,
+        balance_after: toWallet.balance,
         status: TransactionStatus.COMPLETED,
       });
 
