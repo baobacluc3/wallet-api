@@ -1,17 +1,32 @@
 # Auth module — integration guide
 
-This drops into your existing NestJS + TypeORM wallet API. It's built around
+This NestJS + TypeORM wallet API uses PostgreSQL. It's built around
 one core mechanism: **refresh token rotation with reuse detection**, using the
 same pessimistic-locking pattern you already used for wallet transfers.
 
 ## 1. Install dependencies
 
 ```bash
-npm install @nestjs/jwt @nestjs/passport passport passport-jwt argon2 @nestjs/throttler @nestjs/config ioredis
+npm install @nestjs/jwt @nestjs/passport passport passport-jwt argon2 @nestjs/throttler @nestjs/config ioredis pg
 npm install -D @types/passport-jwt
 ```
 
-## 2. Generate an RS256 key pair
+## 2. Configure PostgreSQL
+
+Create a PostgreSQL database, then copy `.env.example` to `.env` and set the
+connection details. `DATABASE_URL` may be used instead of the individual
+`DB_*` variables. For example:
+
+```bash
+createdb wallet_api
+cp .env.example .env
+```
+
+The application enables TypeORM schema synchronization outside production.
+In production, run reviewed migrations before deploying rather than relying on
+automatic synchronization.
+
+## 3. Generate an RS256 key pair
 
 ```bash
 openssl genrsa -out private.pem 2048
@@ -24,14 +39,14 @@ Copy `.env.example` into your `.env` and fill in those two values, plus
 `REDIS_URL`. Delete the `.pem` files afterward — only the env vars should
 exist on disk.
 
-## 3. Merge the User entity changes
+## 4. Merge the User entity changes
 
 `src/users/entities/user.entity.ts` here shows the four new columns
 (`role`, `isEmailVerified`, `failedLoginAttempts`, `lockedUntil`) and the
 `refreshTokens` relation. Merge these into your existing entity rather than
 overwriting it if you've already got other fields on there.
 
-## 4. Run the migration
+## 5. Run the migration
 
 Copy `migrations/1735300000000-CreateAuthTables.ts` into your migrations
 folder (rename the timestamp if your CLI cares) and run it the same way you
@@ -41,13 +56,13 @@ ran your wallet migrations:
 npm run typeorm migration:run
 ```
 
-## 5. Fix the Wallet import path
+## 6. Fix the Wallet import path
 
 `auth.module.ts` and `wallet-owner.guard.ts` import
 `../wallets/entities/wallet.entity`. Point that at wherever your actual
 `Wallet` entity lives.
 
-## 6. Wire up app.module.ts
+## 7. Wire up app.module.ts
 
 ```ts
 import { RedisModule } from './redis/redis.module';
@@ -65,7 +80,7 @@ import { AuthModule } from './auth/auth.module';
 export class AppModule {}
 ```
 
-## 7. Global validation + basic hardening in main.ts
+## 8. Global validation + basic hardening in main.ts
 
 ```ts
 import { ValidationPipe } from '@nestjs/common';
@@ -73,11 +88,15 @@ import helmet from 'helmet';
 
 app.use(helmet());
 app.useGlobalPipes(
-  new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
+  new ValidationPipe({
+    whitelist: true,
+    forbidNonWhitelisted: true,
+    transform: true,
+  }),
 );
 ```
 
-## 8. Protect the wallet endpoints
+## 9. Protect the wallet endpoints
 
 Every route on your wallet controller is now guarded by default (the
 `JwtAuthGuard` is global). Add ownership checks on top for the wallet-specific
@@ -96,7 +115,7 @@ withdraw(@Param('id') id: string, @Body() dto: WithdrawDto) { ... }
 For `/transfers`, check ownership of `fromWalletId` against `req.user.id`
 manually inside the service — the guard here only handles single `:id` routes.
 
-## 9. Smoke test
+## 10. Smoke test
 
 ```bash
 # Register
