@@ -1,0 +1,230 @@
+• Use Postman (or Swagger) and test in this order. Your API base URL is:
+
+  http://localhost:3000
+
+  First run the automated checks:
+
+  npm test -- --runInBand
+  npm run build
+
+  Then test the API manually.
+
+  ## 1. Health check
+
+  GET http://localhost:3000/
+
+  Expected: a successful hello response.
+
+  ## 2. Register two users
+
+  Create Alice:
+
+  POST /auth/register
+  Content-Type: application/json
+
+  {
+    "name": "Alice",
+    "email": "alice@example.com",
+    "password": "StrongPass123"
+  }
+
+  {
+      "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOjEsImVtYWlsIjoiYWxpY2VAZXhhbXBsZS5jb20iLCJyb2xlIjoidXNlciIsImp0aSI6IjJlYmZkY2Y3LTNjOTQtNDgwNy1iZGI2LTRmZmU3ZDVkYzIyNCIsImlhdCI6MTc4ODU1MDAyMCwiZXhwIjoxNzg4NTUwOTIwfQ.OyPT_26pIU7pU_XDqJTB0TDDiXFP9v_v1we3HtNBOoU",
+      "refreshToken": "fcf9e61270498cf95e22d9147f30db6de225c19f6f65474ab6385456596fad256ce1124d73052cb227c3d47367570826825e6307039a98af3c90a5a050a28c82",
+      "expiresIn": 900
+  }
+
+  Create Bob with a different email:
+
+  {
+    "name": "Bob",
+    "email": "bob@example.com",
+    "password": "StrongPass123"
+  }
+
+  {
+      "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOjIsImVtYWlsIjoiYm9iQGV4YW1wbGUuY29tIiwicm9sZSI6InVzZXIiLCJqdGkiOiJiN2Y1YWE4Mi1lZmQ5LTQ2NzctYmUwNy05ZTU5MzljOGZhMjEiLCJpYXQiOjE3ODg1NTAwNDIsImV4cCI6MTc4ODU1MDk0Mn0.NfzTiw3Np2velaKNI6eD7V6fzXZZv4l2xUgJgEY036U",
+      "refreshToken": "d7303994380e27cfdc1fec2eba8a3c164418a236a549c7f6d718b6bd9e84dfd2ca811140602ab58e69b22a32fb455471d1884ac1174387167cb8deb964513770",
+      "expiresIn": 900
+  }
+
+  Save each response’s accessToken and refreshToken.
+
+  In Postman, set an environment variable:
+
+  aliceAccessToken = <Alice accessToken>
+  aliceRefreshToken = <Alice refreshToken>
+
+  Do the same for Bob.
+
+  ## 3. Get each user ID
+
+  For Alice:
+
+  GET /auth/me
+  Authorization: Bearer {{aliceAccessToken}}
+
+  The response contains Alice’s id. Repeat with Bob’s token to get Bob’s ID.
+
+  ## 4. Create test wallets in pgAdmin
+
+  The current API does not automatically create a wallet during registration, so create one wallet per test user through pgAdmin’s Query Tool.
+
+  Replace 1 and 2 with the actual user IDs returned by /auth/me:
+
+  INSERT INTO wallets (user_id, balance_cents, currency)
+  VALUES (1, 0, 'USD')
+  RETURNING id;
+
+  INSERT INTO wallets (user_id, balance_cents, currency)
+  VALUES (2, 0, 'USD')
+  RETURNING id;
+
+  Save the returned wallet IDs as Alice’s and Bob’s wallet IDs.
+
+  ## 5. Deposit into Alice’s wallet
+
+  POST /wallets/deposit
+  Authorization: Bearer {{aliceAccessToken}}
+  Content-Type: application/json
+
+  {
+    "walletId": 1,
+    "amountCents": 10000,
+    "idempotencyKey": "alice-deposit-001",
+    "referenceId": "manual-test-001"
+  }
+
+  10000 means $100.00 if the wallet currency is USD.
+
+  Repeat the exact same request with the same idempotencyKey. The balance must not increase again; it should return the original transaction result.
+
+  ## 6. Withdraw from Alice’s wallet
+
+  POST /wallets/withdraw
+  Authorization: Bearer {{aliceAccessToken}}
+  Content-Type: application/json
+
+  {
+    "walletId": 1,
+    "amount": 2500,
+    "idempotencyKey": "alice-withdraw-001"
+  }
+
+  Expected remaining balance: 7500.
+
+  Then test insufficient funds:
+
+  {
+    "walletId": 1,
+    "amount": 999999,
+    "idempotencyKey": "alice-withdraw-fail-001"
+  }
+
+  Expected: 400 Bad Request with an “Insufficient funds” message.
+
+  ## 7. Transfer from Alice to Bob
+
+  POST /wallets/transfers
+  Authorization: Bearer {{aliceAccessToken}}
+  Content-Type: application/json
+
+  {
+    "fromWalletId": 1,
+    "toWalletId": 2,
+    "amount": 3000,
+    "idempotencyKey": "alice-to-bob-001"
+  }
+
+  Expected:
+
+  - Alice: 7500 → 4500
+  - Bob: 0 → 3000
+  - Two ledger transactions are created: TRANSFER_OUT and TRANSFER_IN.
+
+  Repeat it with the same idempotency key; it must not transfer money twice.
+
+  ## 8. Test transaction history
+
+  As Alice:
+
+  GET /wallets/1/transactions?page=1&limit=20&sortBy=createdAt&sortOrder=desc
+  Authorization: Bearer {{aliceAccessToken}}
+
+  Try filters:
+
+  GET /wallets/1/transactions?type=deposit
+  GET /wallets/1/transactions?type=withdraw
+  GET /wallets/1/transactions?type=transfer
+
+  As Bob, request Alice’s wallet history:
+
+  GET /wallets/1/transactions
+  Authorization: Bearer {{bobAccessToken}}
+
+  Expected: 403 Forbidden.
+
+  ## 9. Test validation and security
+
+  Try these and confirm the consistent error response includes a requestId:
+
+  - No Authorization header on a protected endpoint → 401
+  - Invalid ID: GET /wallets/abc/transactions → 400
+  - Unknown payload field on login/register → 400
+  - Invalid password during registration → 400
+  - Negative deposit/withdraw amount → 400
+  - Alice attempting to deposit into Bob’s wallet → 403
+
+  You can send a correlation ID too:
+
+  X-Request-Id: manual-test-001
+
+  The same value should be returned in the response header and error body.
+
+  ## 10. Test refresh and logout
+
+  Refresh:
+
+  POST /auth/refresh
+  Content-Type: application/json
+
+  {
+    "refreshToken": "{{aliceRefreshToken}}"
+  }
+
+  Use the newly returned token pair afterward. Reusing the old refresh token should be rejected because refresh-token rotation is enabled.
+
+  Logout:
+
+  POST /auth/logout
+  Authorization: Bearer {{aliceAccessToken}}
+  Content-Type: application/json
+
+  {
+    "refreshToken": "{{aliceRefreshToken}}"
+  }
+
+  Because you set REDIS_ENABLED=false, logout revokes the refresh token but does not immediately invalidate the existing access token. That behavior is expected locally; enable Redis for full access-token revocation testing.
+
+  ## 11. Test the admin-only reconciliation endpoint
+
+  Promote Alice only in your local database:
+
+  UPDATE users
+  SET role = 'admin'
+  WHERE email = 'alice@example.com';
+
+  Log in again so the new access token contains the admin role, then call:
+
+  GET /wallets/1/verify
+  Authorization: Bearer <new-admin-token>
+
+  Expected:
+
+  {
+    "storedBalanceCents": 4500,
+    "computedBalance": 4500,
+    "consistent": true
+  }
+
+  This validates that the stored wallet balance agrees with the completed ledger entries.

@@ -1,0 +1,37 @@
+ Implemented protected Transaction History at:
+
+  GET /wallets/:id/transactions
+
+  Supports:
+
+  - Owner-only access via JWT
+  - Pagination: page, limit
+  - Filters: type=deposit|withdraw|transfer, fromDate, toDate
+  - Sorting: sortBy=createdAt|amount, sortOrder=asc|desc
+  - TypeORM query builder with stable secondary ordering
+  - Required { data, meta } response contract
+  - Invalid wallet ID/date/range, missing wallet, and unauthorized owner handling
+  - Swagger docs at /api/docs
+
+  Key files:
+
+  - History DTO (src/transaction/dto/get-transactions.dto.ts)
+  - Response Swagger DTO (src/transaction/dto/transaction-history-response.dto.ts)
+  - Controller endpoint (src/wallet/wallet.controller.ts)
+  - Query and ownership logic (src/wallet/wallet.service.ts)
+  - Swagger/global validation setup (src/main.ts)
+
+  Example:
+
+  GET /wallets/4/transactions?page=1&limit=20&type=transfer&fromDate=2026-09-01T00:00:00.000Z&sortBy=amount&sortOrder=desc
+  Authorization: Bearer <access-token>
+
+  I also fixed authentication wiring necessary for this protected endpoint, corrected the login handler, and fixed the deposit DTO type that previously broke compilation.
+
+  Verified:
+
+  - npm run build passes
+  - npm test -- --runInBand passes: 4 tests covering filtering/pagination, nonexistent wallet, ownership, and invalid date ranges
+  - Prettier passes for all changed files
+
+  Full database/Redis e2e execution still needs a configured PostgreSQL and Redis instance.

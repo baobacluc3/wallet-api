@@ -21,11 +21,11 @@ export class TransactionService {
       });
 
       if (!fromWallet || !toWallet) throw new Error('wallet not found');
-      if (fromWallet.balance < amount) {
+      if (fromWallet.balanceCents < amount) {
         throw new Error('Insufficient balance');
       }
-      fromWallet.balance -= amount;
-      toWallet.balance += amount;
+      fromWallet.balanceCents -= amount;
+      toWallet.balanceCents += amount;
 
       await queryRunner.manager.save(fromWallet);
       await queryRunner.manager.save(toWallet);

@@ -1,4 +1,5 @@
 import {
+  Check,
   Column,
   CreateDateColumn,
   Entity,
@@ -31,46 +32,94 @@ export enum TransactionStatus {
 }
 
 @Entity('transactions')
-@Index(['wallet', 'created_at']) // composite index matches the WHERE + ORDER BY exactly
+@Check('CHK_transactions_amount_positive', '"amount_cents" > 0')
+@Check(
+  'CHK_transactions_balance_non_negative',
+  '"balance_before_cents" >= 0 AND "balance_after_cents" >= 0',
+)
+@Check(
+  'CHK_transactions_balance_transition',
+  `(
+    "status" = 'COMPLETED' AND (
+      ("type" IN ('CREDIT', 'TRANSFER_IN') AND "balance_after_cents" = "balance_before_cents" + "amount_cents") OR
+      ("type" IN ('DEBIT', 'TRANSFER_OUT') AND "balance_after_cents" = "balance_before_cents" - "amount_cents")
+    )
+  ) OR (
+    "status" <> 'COMPLETED' AND "balance_after_cents" = "balance_before_cents"
+  )`,
+)
+@Index('IDX_transactions_wallet_created_at', ['walletId', 'createdAt'])
+@Index('IDX_transactions_wallet_type_created_at', [
+  'walletId',
+  'type',
+  'createdAt',
+])
+@Index('IDX_transactions_wallet_amount_cents', ['walletId', 'amountCents'])
+@Index(
+  'UQ_transactions_wallet_idempotency_key',
+  ['walletId', 'idempotencyKey'],
+  {
+    unique: true,
+    where: '"idempotency_key" IS NOT NULL',
+  },
+)
 export class Transaction {
   @PrimaryGeneratedColumn()
   id: number;
 
   @Column({
-    type: 'text',
+    type: 'enum',
     enum: TransactionType,
+    enumName: 'transaction_type_enum',
   })
   type: TransactionType;
 
-  @Column()
-  amount: number;
+  @Column({ name: 'amount_cents', type: 'integer' })
+  amountCents: number;
 
-  @Column()
-  balance_before: number;
+  @Column({ name: 'balance_before_cents', type: 'integer' })
+  balanceBeforeCents: number;
 
-  @Column()
-  balance_after: number;
+  @Column({ name: 'balance_after_cents', type: 'integer' })
+  balanceAfterCents: number;
 
   @Column({
-    type: 'text',
+    type: 'enum',
     enum: TransactionStatus,
+    enumName: 'transaction_status_enum',
   })
   status: TransactionStatus;
 
-  @Column({ type: 'text', nullable: true, unique: true })
+  @Column({
+    name: 'idempotency_key',
+    type: 'varchar',
+    length: 128,
+    nullable: true,
+  })
   idempotencyKey?: string | null;
 
-  @Column({ type: 'text', nullable: true, length: 64 })
+  @Column({ name: 'reference_id', type: 'varchar', nullable: true, length: 64 })
   referenceId?: string | null;
 
-  @ManyToOne(() => Wallet, (wallet) => wallet.transactions)
+  @Column({ name: 'wallet_id', type: 'integer' })
+  walletId: number;
+
+  @ManyToOne(() => Wallet, (wallet) => wallet.transactions, {
+    onDelete: 'RESTRICT',
+  })
   @JoinColumn({ name: 'wallet_id' })
   wallet: Wallet;
 
-  @ManyToOne(() => Transfer, (transfer) => transfer.transactions)
-  @JoinColumn({ name: 'transfer_id' })
-  transfer: Transfer;
+  @Column({ name: 'transfer_id', type: 'integer', nullable: true })
+  transferId: number | null;
 
-  @CreateDateColumn()
-  created_at: Date;
+  @ManyToOne(() => Transfer, (transfer) => transfer.transactions, {
+    nullable: true,
+    onDelete: 'RESTRICT',
+  })
+  @JoinColumn({ name: 'transfer_id' })
+  transfer: Transfer | null;
+
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
+  createdAt: Date;
 }

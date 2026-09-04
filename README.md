@@ -1,154 +1,114 @@
-# Auth module — integration guide
+# Wallet API
 
-This NestJS + TypeORM wallet API uses PostgreSQL. It's built around
-one core mechanism: **refresh token rotation with reuse detection**, using the
-same pessimistic-locking pattern you already used for wallet transfers.
+A NestJS wallet backend built to demonstrate production-minded backend
+fundamentals without turning a junior portfolio project into a bank core:
+authentication, authorization, transactional money movements, audit data, and
+an indexed transaction-history API.
 
-## 1. Install dependencies
+## Stack
 
-```bash
-npm install @nestjs/jwt @nestjs/passport passport passport-jwt argon2 @nestjs/throttler @nestjs/config ioredis pg
-npm install -D @types/passport-jwt
-```
+- NestJS, TypeORM, PostgreSQL, Redis
+- Argon2id password hashing and JWT access tokens
+- Refresh-token rotation with token-family reuse detection
+- Swagger at `GET /api/docs`
 
-## 2. Configure PostgreSQL
+## Request pipeline
 
-Create a PostgreSQL database, then copy `.env.example` to `.env` and set the
-connection details. `DATABASE_URL` may be used instead of the individual
-`DB_*` variables. For example:
+The cross-cutting concerns are deliberately small and live in `src/common` or
+the owning `auth` module rather than in controllers and services:
 
-```bash
-createdb wallet_api
-cp .env.example .env
-```
+- `RequestContextMiddleware` assigns or validates `X-Request-Id`, captures
+  request metadata, and returns the correlation ID to the client.
+- Global `JwtAuthGuard` makes endpoints private by default; `@Public()` is
+  used only for the health and credential endpoints. `RolesGuard` enforces
+  `@Roles(...)` metadata only on routes that declare a role requirement (the
+  wallet reconciliation endpoint is administrator-only), and
+  `WalletOwnerGuard` is applied only to commands that mutate a specific wallet.
+- Global validation rejects unknown input and transforms validated DTOs.
+  `ParsePositiveIntPipe` is reserved for wallet route IDs, where its strict
+  integer semantics add value beyond generic DTO validation.
+- `RequestLoggingInterceptor` adds `Cache-Control: no-store` and records
+  completed request timing with the correlation ID. `HttpExceptionFilter`
+  provides one client-safe error shape and never exposes unexpected exception
+  details.
+- `@CurrentUser()`, `@ClientCtx()`, `@Public()`, and `@Roles()` keep handlers
+  declarative without hiding business rules in decorators.
 
-The application enables TypeORM schema synchronization outside production.
-In production, run reviewed migrations before deploying rather than relying on
-automatic synchronization.
+The lifecycle is middleware → guards → interceptor → pipes/controller →
+interceptor response; exceptions are normalized by the filter. Unit tests cover
+the strict pipe, error filter, roles guard, JWT identity mapping, and wallet
+history access rules.
 
-## 3. Generate an RS256 key pair
+## Database design
 
-```bash
-openssl genrsa -out private.pem 2048
-openssl rsa -in private.pem -pubout -out public.pem
-base64 -i private.pem | tr -d '\n'   # → JWT_PRIVATE_KEY_BASE64
-base64 -i public.pem  | tr -d '\n'   # → JWT_PUBLIC_KEY_BASE64
-```
+The schema uses PostgreSQL and stores monetary values as **integer minor units**
+(for example, cents). It deliberately does not use JavaScript floating point for
+money.
 
-Copy `.env.example` into your `.env` and fill in those two values, plus
-`REDIS_URL`. Delete the `.pem` files afterward — only the env vars should
-exist on disk.
+| Table            | Purpose                                   | Important guarantees                                                                 |
+| ---------------- | ----------------------------------------- | ------------------------------------------------------------------------------------ |
+| `users`          | Accounts and lockout state                | Case-insensitive unique email, hidden password hash, timestamps                      |
+| `wallets`        | One wallet per user                       | Non-negative balance, ISO-4217 currency check, optimistic version column             |
+| `transactions`   | Append-only wallet ledger                 | Balance snapshots, positive amount and balance-transition checks, scoped idempotency |
+| `transfers`      | Links the debit and credit ledger entries | Different source/destination wallets, positive amount, idempotency key               |
+| `refresh_tokens` | Rotating sessions                         | Hashed token only, family/revocation indexes, replacement lineage                    |
+| `auth_events`    | Security audit trail                      | Indexed user/type timelines, IP, user agent, structured metadata                     |
 
-## 4. Merge the User entity changes
+Foreign keys intentionally use `RESTRICT` for financial ledger data, so a
+wallet or user cannot be removed while its money/audit history still exists.
 
-`src/users/entities/user.entity.ts` here shows the four new columns
-(`role`, `isEmailVerified`, `failedLoginAttempts`, `lockedUntil`) and the
-`refreshTokens` relation. Merge these into your existing entity rather than
-overwriting it if you've already got other fields on there.
+## Setup
 
-## 5. Run the migration
-
-Copy `migrations/1735300000000-CreateAuthTables.ts` into your migrations
-folder (rename the timestamp if your CLI cares) and run it the same way you
-ran your wallet migrations:
-
-```bash
-npm run typeorm migration:run
-```
-
-## 6. Fix the Wallet import path
-
-`auth.module.ts` and `wallet-owner.guard.ts` import
-`../wallets/entities/wallet.entity`. Point that at wherever your actual
-`Wallet` entity lives.
-
-## 7. Wire up app.module.ts
-
-```ts
-import { RedisModule } from './redis/redis.module';
-import { AuthModule } from './auth/auth.module';
-
-@Module({
-  imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
-    // ...your existing TypeOrmModule.forRoot(...) etc.
-    RedisModule,
-    AuthModule,
-    // ...WalletsModule, etc.
-  ],
-})
-export class AppModule {}
-```
-
-## 8. Global validation + basic hardening in main.ts
-
-```ts
-import { ValidationPipe } from '@nestjs/common';
-import helmet from 'helmet';
-
-app.use(helmet());
-app.useGlobalPipes(
-  new ValidationPipe({
-    whitelist: true,
-    forbidNonWhitelisted: true,
-    transform: true,
-  }),
-);
-```
-
-## 9. Protect the wallet endpoints
-
-Every route on your wallet controller is now guarded by default (the
-`JwtAuthGuard` is global). Add ownership checks on top for the wallet-specific
-routes:
-
-```ts
-@UseGuards(WalletOwnerGuard)
-@Get(':id/balance')
-getBalance(@Param('id') id: string) { ... }
-
-@UseGuards(WalletOwnerGuard)
-@Post(':id/withdraw')
-withdraw(@Param('id') id: string, @Body() dto: WithdrawDto) { ... }
-```
-
-For `/transfers`, check ownership of `fromWalletId` against `req.user.id`
-manually inside the service — the guard here only handles single `:id` routes.
-
-## 10. Smoke test
+1. Create a PostgreSQL database and (for full logout/token-revocation support)
+   a Redis instance.
+2. Copy `.env.example` to `.env` and set `DATABASE_URL` or the `DB_*` values,
+   `REDIS_URL`, and a long random `JWT_SECRET`.
+   For local development without Redis, set `REDIS_ENABLED=false`; revoked
+   access tokens will not be blacklisted until Redis is enabled.
+3. Install dependencies and apply the schema:
 
 ```bash
-# Register
-curl -X POST localhost:3000/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"email":"a@test.com","password":"Passw0rd123","name":"A"}'
-
-# Login
-curl -X POST localhost:3000/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"a@test.com","password":"Passw0rd123"}'
-
-# Use the access token
-curl localhost:3000/auth/me -H "Authorization: Bearer <accessToken>"
-
-# Rotate
-curl -X POST localhost:3000/auth/refresh \
-  -H "Content-Type: application/json" \
-  -d '{"refreshToken":"<refreshToken>"}'
-
-# Replay the OLD refresh token again → should now revoke the whole session
-# family and return 401, since it's already been rotated away once.
+npm install
+npm run migration:run
+npm run start:dev
 ```
 
-## What's deliberately out of scope for now
+The Swagger UI is available at `http://localhost:3000/api/docs`.
 
-You chose core-only for this pass. The schema already supports these as a
-clean phase 2, without a redesign:
+> The included migration is a **baseline for a fresh database**. If a database
+> was previously created using TypeORM `synchronize`, create and review a
+> one-off upgrade migration before deploying; do not apply the baseline over
+> existing data.
 
-- **2FA (TOTP)** — add a `twoFactorSecret` column on `User` and a verify step
-  between login and token issuance.
-- **Google OAuth** — add a `GoogleStrategy`, link by email, issue the same
-  token pair `issueTokenPair` already produces.
-- **Session/device management** — you're already storing `ip` and
-  `userAgent` per refresh token. A `GET /auth/sessions` endpoint listing
-  active (non-revoked) tokens is mostly a `find()` away.
+## Useful commands
+
+```bash
+npm run build
+npm test -- --runInBand
+npm run migration:run
+npm run migration:revert
+```
+
+## Transaction history
+
+Only the wallet owner can access the endpoint below:
+
+```http
+GET /wallets/:id/transactions?page=1&limit=20&type=transfer&sortBy=createdAt&sortOrder=desc
+Authorization: Bearer <access-token>
+```
+
+Supported filters are `type=deposit|withdraw|transfer`, `fromDate`, and
+`toDate`. The response contains `{ data, meta }` and uses indexed TypeORM
+queries for pagination.
+
+## Design choices to discuss in an interview
+
+- Pessimistic row locks protect concurrent withdrawals and transfers.
+- Transfers lock wallets in numeric order to reduce deadlocks.
+- The database, not just the API, rejects negative balances, invalid currency
+  codes, invalid ledger transitions, and duplicate idempotency keys.
+- Refresh tokens are stored only as SHA-256 hashes; a reused rotated token
+  revokes its whole token family.
+- Migrations are reviewed and run by deployment tooling. Runtime schema
+  synchronization is disabled in every environment.

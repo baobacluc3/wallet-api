@@ -1,0 +1,36 @@
+• Implemented a production-style PostgreSQL schema baseline and disabled runtime schema synchronization.
+
+  Highlights:
+
+  - Integer-cent money fields with DB checks preventing negative balances and invalid ledger transitions.
+  - Proper FK ownership, one wallet per user, RESTRICT protection for financial history.
+  - Scoped idempotency constraints and replay handling for concurrent deposit/withdraw/transfer requests.
+  - Indexed transaction history, refresh-token revocation, transfer lookup, and audit-event queries.
+  - Consistent camelCase entities mapped to snake_case columns.
+  - Password hashes are no longer selected by default; email is normalized and uniquely protected case-insensitively.
+  - Added timestamps, optimistic wallet versioning, token replacement lineage, and structured auth audit records.
+  - Added migration commands and replaced the README with CV-friendly architecture documentation.
+
+  Key files:
+
+  - Baseline PostgreSQL migration (src/database/migrations/1736121600000-CreateProductionSchema.ts)
+  - TypeORM migration datasource (src/database/data-source.ts)
+  - Wallet schema (src/wallet/entities/wallet.entity.ts)
+  - Ledger transaction schema (src/transaction/entities/transaction.entity.ts)
+  - Transfer schema (src/transfer/entities/transfer.entity.ts)
+  - Updated project documentation (README.md)
+
+  Run the fresh-schema migration with:
+
+  npm run migration:run
+
+  Important: this is a baseline migration for a new PostgreSQL database. Do not apply it directly to an existing schema created through synchronize; create a reviewed upgrade migration first.
+
+  Verified:
+
+  - npm run build passes
+  - npm test -- --runInBand passes
+  - Migration CLI command is valid
+  - Changed code passes Prettier
+
+  One remaining dependency item: production audit reports one moderate transitive qs advisory through Express/body-parser. Update the Nest/Express dependency chain and rerun npm audit before deployment.

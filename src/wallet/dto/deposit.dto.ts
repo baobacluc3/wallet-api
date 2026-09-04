@@ -1,20 +1,16 @@
-import {
-  IsUUID,
-  IsInt,
-  Min,
-  IsOptional,
-  IsString,
-  Length,
-} from 'class-validator';
-import { PrimaryGeneratedColumn } from 'typeorm';
+import { IsInt, Min, IsOptional, IsString, Length } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class DepositDto {
-  @PrimaryGeneratedColumn()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
   walletId: number;
 
+  @Type(() => Number)
   @IsInt({ message: 'Amount must be an integer (cents)' })
   @Min(1, { message: 'Amount must be greater than zero' })
-  amountCents: string;
+  amountCents: number;
 
   @IsOptional()
   @IsString()

@@ -3,48 +3,52 @@ import {
   CreateDateColumn,
   Entity,
   Index,
+  JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
 
 @Entity('refresh_tokens')
+@Index('IDX_refresh_tokens_user_revoked', ['userId', 'revoked'])
+@Index('IDX_refresh_tokens_family_revoked', ['familyId', 'revoked'])
+@Index('IDX_refresh_tokens_expires_at', ['expiresAt'])
 export class RefreshToken {
   @PrimaryGeneratedColumn()
   id: number;
 
   @Index({ unique: true })
-  @Column()
+  @Column({ name: 'token_hash', type: 'char', length: 64 })
   tokenHash: string;
 
-  @Index()
-  @Column('uuid')
+  @Column({ name: 'family_id', type: 'uuid' })
   familyId: string; //A refresh-token family is a chain of tokens created from the same login session.
 
   @ManyToOne(() => User, (user) => user.refreshTokens, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'user_id' })
   user: User;
 
-  @Column()
+  @Column({ name: 'user_id', type: 'integer' })
   userId: number;
 
-  @Column({ type: 'uuid', nullable: true })
+  @Column({ name: 'replaced_by_token_id', type: 'integer', nullable: true })
   replacedByTokenId: number | null;
 
-  @Column({ default: false })
+  @Column({ type: 'boolean', default: false })
   revoked: boolean;
 
-  @Column({ type: 'timestamptz', nullable: true })
+  @Column({ name: 'revoked_at', type: 'timestamptz', nullable: true })
   revokedAt: Date | null;
 
-  @Column({ nullable: true })
+  @Column({ name: 'user_agent', type: 'text', nullable: true })
   userAgent: string | null;
 
-  @Column({ nullable: true })
+  @Column({ type: 'inet', nullable: true })
   ip: string | null;
 
-  @Column({ type: 'timestamptz' })
+  @Column({ name: 'expires_at', type: 'timestamptz' })
   expiresAt: Date;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 }

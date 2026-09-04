@@ -2,12 +2,15 @@ import {
   CanActivate,
   ExecutionContext,
   ForbiddenException,
+  Injectable,
   NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { Wallet } from '../../wallet/entities/wallet.entity';
 import { InjectRepository } from '@nestjs/typeorm';
 
+@Injectable()
 export class WalletOwnerGuard implements CanActivate {
   constructor(
     @InjectRepository(Wallet)
@@ -16,8 +19,16 @@ export class WalletOwnerGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
-    const walletId = request.params.id ?? request.params.walletId;
+    const walletId = Number(
+      request.params.id ??
+        request.params.walletId ??
+        request.body?.walletId ??
+        request.body?.fromWalletId,
+    );
     const user = request.user;
+    if (!Number.isSafeInteger(walletId) || walletId < 1) {
+      throw new BadRequestException('A valid wallet ID is required');
+    }
     const wallet = await this.walletRepository.findOne({
       where: { id: walletId },
       select: {
@@ -31,7 +42,7 @@ export class WalletOwnerGuard implements CanActivate {
     }
 
     if (wallet.userId !== user.id) {
-      throw new ForbiddenException('you do not own this wallet');
+      throw new ForbiddenException('You do not own this wallet');
     }
 
     return true;

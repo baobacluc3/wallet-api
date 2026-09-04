@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -11,12 +12,18 @@ import {
   TransactionStatus,
   TransactionType,
 } from '../transaction/entities/transaction.entity';
-import { DataSource, FindOptionsWhere, Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { Wallet } from './entities/wallet.entity';
 import { WithdrawDto } from './dto/withdraw.dto';
 import { TransferDto } from './dto/transfer.dto';
-import { Transfer } from '../transfer/entities/transfer.entity';
+import { Transfer, TransferStatus } from '../transfer/entities/transfer.entity';
 import { GetTransactionsDto } from '../transaction/dto/get-transactions.dto';
+import {
+  SortOrder,
+  TransactionHistorySortBy,
+  TransactionHistoryType,
+} from '../transaction/dto/get-transactions.dto';
+import { TransactionHistoryResponseDto } from '../transaction/dto/transaction-history-response.dto';
 
 @Injectable()
 export class WalletService {
@@ -34,7 +41,7 @@ export class WalletService {
   async deposit(dto: DepositDto) {
     if (dto.idempotencyKey) {
       const existing = await this.transactionRepo.findOne({
-        where: { idempotencyKey: dto.idempotencyKey },
+        where: { walletId: dto.walletId, idempotencyKey: dto.idempotencyKey },
         relations: { wallet: true }, //When find the Transaction, also load its related Wallet
       });
       if (existing) {
@@ -59,14 +66,17 @@ export class WalletService {
       if (!wallet) {
         throw new NotFoundException(`Wallet ${dto.walletId} not found`);
       }
-      wallet.balance += dto.amountCents;
-      wallet.version += 1;
+      const balanceBeforeCents = wallet.balanceCents;
+      wallet.balanceCents += dto.amountCents;
       await queryRunner.manager.save(wallet);
 
       const transaction = queryRunner.manager.create(Transaction, {
-        wallet: wallet,
+        wallet,
+        walletId: wallet.id,
         type: TransactionType.CREDIT,
-        amount: dto.amountCents,
+        amountCents: dto.amountCents,
+        balanceBeforeCents,
+        balanceAfterCents: wallet.balanceCents,
         status: TransactionStatus.COMPLETED,
         referenceId: dto.referenceId ?? null,
         idempotencyKey: dto.idempotencyKey ?? null,
@@ -79,7 +89,24 @@ export class WalletService {
       );
       return { wallet, transaction: savedTransaction };
     } catch (error) {
-      await queryRunner.rollbackTransaction();
+      if (queryRunner.isTransactionActive) {
+        await queryRunner.rollbackTransaction();
+      }
+
+      // The database's partial unique index is the final idempotency guard.
+      // A concurrent request that loses this race returns the first result.
+      if (dto.idempotencyKey && this.isUniqueConstraintError(error)) {
+        const existing = await this.transactionRepo.findOne({
+          where: {
+            walletId: dto.walletId,
+            idempotencyKey: dto.idempotencyKey,
+          },
+          relations: { wallet: true },
+        });
+        if (existing) {
+          return { wallet: existing.wallet, transaction: existing };
+        }
+      }
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(
         `Deposit failed for wallet ${dto.walletId}: ${message}`,
@@ -100,7 +127,10 @@ export class WalletService {
       // 1. Check idempotency
       if (dto.idempotencyKey) {
         const existing = await queryRunner.manager.findOne(Transaction, {
-          where: { idempotencyKey: dto.idempotencyKey },
+          where: {
+            walletId: dto.walletId,
+            idempotencyKey: dto.idempotencyKey,
+          },
           relations: { wallet: true },
         });
 
@@ -126,20 +156,24 @@ export class WalletService {
       }
 
       // 3. Check balance
-      if (wallet.balance < dto.amount) {
+      if (wallet.balanceCents < dto.amount) {
         throw new BadRequestException('Insufficient funds');
       }
 
       // 4. Update balance
-      wallet.balance -= dto.amount;
+      const balanceBeforeCents = wallet.balanceCents;
+      wallet.balanceCents -= dto.amount;
 
       await queryRunner.manager.save(wallet);
 
       // 5. Create transaction record
       const transaction = queryRunner.manager.create(Transaction, {
-        wallet: wallet,
+        wallet,
+        walletId: wallet.id,
         type: TransactionType.DEBIT,
-        amount: dto.amount,
+        amountCents: dto.amount,
+        balanceBeforeCents,
+        balanceAfterCents: wallet.balanceCents,
         status: TransactionStatus.COMPLETED,
         idempotencyKey: dto.idempotencyKey ?? null,
       });
@@ -151,12 +185,30 @@ export class WalletService {
 
       return {
         walletId: wallet.id,
-        newBalance: wallet.balance,
+        newBalanceCents: wallet.balanceCents,
         transactionId: transaction.id,
         replayed: false,
       };
     } catch (error) {
-      await queryRunner.rollbackTransaction();
+      if (queryRunner.isTransactionActive) {
+        await queryRunner.rollbackTransaction();
+      }
+      if (dto.idempotencyKey && this.isUniqueConstraintError(error)) {
+        const existing = await this.transactionRepo.findOne({
+          where: {
+            walletId: dto.walletId,
+            idempotencyKey: dto.idempotencyKey,
+          },
+          relations: { wallet: true },
+        });
+        if (existing) {
+          return {
+            walletId: existing.wallet.id,
+            transactionId: existing.id,
+            replayed: true,
+          };
+        }
+      }
       throw error;
     } finally {
       await queryRunner.release();
@@ -185,7 +237,10 @@ export class WalletService {
         };
       }
 
-      const [firstId, secondId] = [dto.fromWalletId, dto.toWalletId].sort();
+      // Lock wallets in numeric order so opposing transfers cannot deadlock.
+      const [firstId, secondId] = [dto.fromWalletId, dto.toWalletId].sort(
+        (left, right) => left - right,
+      );
       const firstWallet = await queryRunner.manager.findOne(Wallet, {
         where: { id: firstId },
         lock: { mode: 'pessimistic_write' },
@@ -212,34 +267,50 @@ export class WalletService {
         );
       }
 
-      if (fromWallet.balance < dto.amount) {
+      if (fromWallet.balanceCents < dto.amount) {
         throw new BadRequestException('Insufficient funds');
       }
 
-      fromWallet.balance -= dto.amount;
-      toWallet.balance += dto.amount;
+      const fromBalanceBeforeCents = fromWallet.balanceCents;
+      const toBalanceBeforeCents = toWallet.balanceCents;
+      fromWallet.balanceCents -= dto.amount;
+      toWallet.balanceCents += dto.amount;
 
       await queryRunner.manager.save([fromWallet, toWallet]);
 
       const transferRecord = queryRunner.manager.create(Transfer, {
-        from_wallet: fromWallet,
-        to_wallet: toWallet,
-        status: 'COMPLETED',
+        fromWallet,
+        fromWalletId: fromWallet.id,
+        toWallet,
+        toWalletId: toWallet.id,
+        amountCents: dto.amount,
+        status: TransferStatus.COMPLETED,
         idempotencyKey: dto.idempotencyKey,
+        reference: null,
       });
 
       await queryRunner.manager.save(transferRecord);
 
       const debitTxn = queryRunner.manager.create(Transaction, {
         wallet: fromWallet,
+        walletId: fromWallet.id,
+        transfer: transferRecord,
+        transferId: transferRecord.id,
         type: TransactionType.TRANSFER_OUT,
-        amount: dto.amount,
+        amountCents: dto.amount,
+        balanceBeforeCents: fromBalanceBeforeCents,
+        balanceAfterCents: fromWallet.balanceCents,
         status: TransactionStatus.COMPLETED,
       });
       const creditTxn = queryRunner.manager.create(Transaction, {
         wallet: toWallet,
+        walletId: toWallet.id,
+        transfer: transferRecord,
+        transferId: transferRecord.id,
         type: TransactionType.TRANSFER_IN,
-        amount: dto.amount,
+        amountCents: dto.amount,
+        balanceBeforeCents: toBalanceBeforeCents,
+        balanceAfterCents: toWallet.balanceCents,
         status: TransactionStatus.COMPLETED,
       });
 
@@ -255,14 +326,36 @@ export class WalletService {
         status: 'COMPLETED',
       };
     } catch (error) {
-      await queryRunner.rollbackTransaction();
+      if (queryRunner.isTransactionActive) {
+        await queryRunner.rollbackTransaction();
+      }
+      if (this.isUniqueConstraintError(error)) {
+        const existing = await this.dataSource.getRepository(Transfer).findOne({
+          where: { idempotencyKey: dto.idempotencyKey },
+        });
+        if (existing) {
+          return {
+            transferId: existing.id,
+            status: existing.status,
+            replayed: true,
+          };
+        }
+      }
       throw error;
     } finally {
       await queryRunner.release();
     }
   }
 
-  async getTransactions(walletId: number, query: GetTransactionsDto) {
+  async getTransactions(
+    walletId: number,
+    userId: number,
+    query: GetTransactionsDto,
+  ): Promise<TransactionHistoryResponseDto> {
+    if (!Number.isSafeInteger(walletId) || walletId < 1) {
+      throw new BadRequestException('Wallet ID must be a positive integer');
+    }
+
     const wallet = await this.walletRepo.findOne({
       where: { id: walletId },
     });
@@ -271,25 +364,79 @@ export class WalletService {
       throw new NotFoundException('Wallet not found');
     }
 
-    const where: FindOptionsWhere<Transaction> = { wallet: { id: walletId } };
-    if (query.type) {
-      where.type = query.type as Transaction['type'];
+    // The wallet must be loaded before the query so consumers receive a clear
+    // 404 for an unknown wallet and a 403 for a wallet owned by somebody else.
+    if (wallet.userId !== userId) {
+      throw new ForbiddenException('You do not own this wallet');
     }
 
-    const [transactions, total] = await this.transactionRepo.findAndCount({
-      where,
-      order: { created_at: 'DESC' },
-      skip: (query.page - 1) * query.limit,
-      take: query.limit,
-    });
+    const fromDate = query.fromDate ? new Date(query.fromDate) : undefined;
+    const toDate = query.toDate ? new Date(query.toDate) : undefined;
+    if (
+      (fromDate && Number.isNaN(fromDate.getTime())) ||
+      (toDate && Number.isNaN(toDate.getTime()))
+    ) {
+      throw new BadRequestException('Dates must be valid ISO 8601 timestamps');
+    }
+    if (fromDate && toDate && fromDate > toDate) {
+      throw new BadRequestException(
+        'fromDate must be before or equal to toDate',
+      );
+    }
+
+    const transactionTypes: Record<TransactionHistoryType, TransactionType[]> =
+      {
+        [TransactionHistoryType.DEPOSIT]: [TransactionType.CREDIT],
+        [TransactionHistoryType.WITHDRAW]: [TransactionType.DEBIT],
+        [TransactionHistoryType.TRANSFER]: [
+          TransactionType.TRANSFER_IN,
+          TransactionType.TRANSFER_OUT,
+        ],
+      };
+    const sortFields: Record<TransactionHistorySortBy, string> = {
+      [TransactionHistorySortBy.CREATED_AT]: 'transaction.created_at',
+      [TransactionHistorySortBy.AMOUNT]: 'transaction.amount_cents',
+    };
+
+    const transactionQuery = this.transactionRepo
+      .createQueryBuilder('transaction')
+      .where('transaction.wallet_id = :walletId', { walletId });
+
+    if (query.type) {
+      transactionQuery.andWhere('transaction.type IN (:...types)', {
+        types: transactionTypes[query.type],
+      });
+    }
+    if (fromDate) {
+      transactionQuery.andWhere('transaction.created_at >= :fromDate', {
+        fromDate,
+      });
+    }
+    if (toDate) {
+      transactionQuery.andWhere('transaction.created_at <= :toDate', {
+        toDate,
+      });
+    }
+
+    const [transactions, total] = await transactionQuery
+      .orderBy(
+        sortFields[query.sortBy],
+        query.sortOrder.toUpperCase() as 'ASC' | 'DESC',
+      )
+      // A stable secondary order prevents duplicate/missing records between pages.
+      .addOrderBy('transaction.id', 'DESC')
+      .skip((query.page - 1) * query.limit)
+      .take(query.limit)
+      .getManyAndCount();
 
     return {
-      walletId,
-      page: query.page,
-      limit: query.limit,
-      total,
-      totalPages: Math.ceil(total / query.limit),
-      transactions,
+      data: transactions,
+      meta: {
+        total,
+        page: query.page,
+        limit: query.limit,
+        totalPages: Math.ceil(total / query.limit),
+      },
     };
   }
 
@@ -300,8 +447,8 @@ export class WalletService {
     const result = await this.transactionRepo
       .createQueryBuilder('t')
       .select(
-        `SUM(CASE WHEN t.type IN ('CREDIT', 'TRANSFER_IN') THEN t.amount
-                WHEN t.type IN ('DEBIT', 'TRANSFER_OUT') THEN -t.amount
+        `SUM(CASE WHEN t.type IN ('CREDIT', 'TRANSFER_IN') THEN t.amount_cents
+                WHEN t.type IN ('DEBIT', 'TRANSFER_OUT') THEN -t.amount_cents
                 ELSE 0 END)`,
         'computed',
       )
@@ -312,9 +459,18 @@ export class WalletService {
     const computedBalance = Number(result.computed ?? 0);
 
     return {
-      storedBalance: wallet.balance,
+      storedBalanceCents: wallet.balanceCents,
       computedBalance,
-      consistent: wallet.balance === computedBalance,
+      consistent: wallet.balanceCents === computedBalance,
     };
+  }
+
+  private isUniqueConstraintError(error: unknown): boolean {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as { code?: string }).code === '23505'
+    );
   }
 }

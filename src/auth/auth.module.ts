@@ -6,8 +6,13 @@ import { JwtModule } from '@nestjs/jwt';
 import { JwtStrategy } from './jwt.strategy';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { StringValue } from 'ms';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { User } from '../users/entities/user.entity';
+import { AuthEvent } from './entities/auth-event.entity';
+import { RefreshToken } from './entities/refresh-token.entity';
 @Module({
   imports: [
+    TypeOrmModule.forFeature([User, AuthEvent, RefreshToken]),
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

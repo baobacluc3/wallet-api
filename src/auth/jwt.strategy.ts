@@ -3,7 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { RedisService } from '../redis/redis.service';
-import { JwtPayLoad } from './interfaces/jwt-payload.interface';
+import { JwtPayload } from './interfaces/jwt-payload.interface';
+import { AuthenticatedUser } from './interfaces/authenticated-user.interface';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -14,15 +15,18 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: Buffer.from(
-        configService.getOrThrow<string>('JWT_PUBLIC_KEY_BASE64'),
-        'base64',
-      ),
+      // AuthModule signs with HS256, therefore verification must use the same secret.
+      secretOrKey: configService.getOrThrow<string>('JWT_SECRET'),
       algorithms: ['HS256'],
     });
   }
 
-  async validate(payload: JwtPayLoad) {
+  async validate(payload: JwtPayload): Promise<AuthenticatedUser> {
+    if (!Number.isSafeInteger(payload.exp)) {
+      throw new UnauthorizedException('Invalid access token');
+    }
+    const expiresAt = payload.exp as number;
+
     const isBlacklisted = await this.redisService.exists(`bl:${payload.jti}`);
     if (isBlacklisted) {
       throw new UnauthorizedException('Token has been revoked');
@@ -32,6 +36,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       email: payload.email,
       role: payload.role,
       jti: payload.jti,
+      expiresAt,
     };
   }
 }

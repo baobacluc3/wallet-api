@@ -11,7 +11,7 @@ import * as argon2 from 'argon2';
 import { AuthEvent } from './entities/auth-event.entity';
 import { AuthEventType } from './enums/auth-event-type.enum';
 import { randomUUID } from 'crypto';
-import { JwtPayLoad } from './interfaces/jwt-payload.interface';
+import { JwtPayload } from './interfaces/jwt-payload.interface';
 import { JwtService } from '@nestjs/jwt';
 import { generateOpaqueToken, hashToken } from './utils/token.util';
 import { RefreshToken } from './entities/refresh-token.entity';
@@ -19,8 +19,6 @@ import { LoginDto } from './dto/login.dto';
 import type { RequestContext } from './decorators/client-context.decorator';
 import { ConfigService } from '@nestjs/config';
 import { RedisService } from '../redis/redis.service';
-
-class JwtPayload {}
 
 @Injectable()
 export class AuthService {
@@ -54,8 +52,9 @@ export class AuthService {
     );
   }
   async register(dto: RegisterDto, ctx: RequestContext) {
+    const email = dto.email.trim().toLowerCase();
     const existing = await this.userRepository.findOne({
-      where: { email: dto.email },
+      where: { email },
     });
     if (existing) {
       throw new ForbiddenException('Unable to register with these details');
@@ -67,7 +66,7 @@ export class AuthService {
 
     const user = await this.userRepository.save(
       this.userRepository.create({
-        email: dto.email,
+        email,
         passwordHash,
         name: dto.name,
       }),
@@ -78,9 +77,13 @@ export class AuthService {
   }
 
   async login(dto: LoginDto, ctx: RequestContext) {
-    const user = await this.userRepository.findOne({
-      where: { email: dto.email },
-    });
+    const email = dto.email.trim().toLowerCase();
+    // passwordHash is select:false so it cannot leak from normal user reads.
+    const user = await this.userRepository
+      .createQueryBuilder('user')
+      .addSelect('user.passwordHash')
+      .where('user.email = :email', { email })
+      .getOne();
     if (!user) {
       throw new UnauthorizedException('invalid credentials');
     }
@@ -143,7 +146,7 @@ export class AuthService {
       }
       const { user } = existingToken;
       const jti = randomUUID();
-      const payload: JwtPayLoad = {
+      const payload: JwtPayload = {
         sub: user.id,
         email: user.email,
         role: user.role,
@@ -193,6 +196,7 @@ export class AuthService {
     rawRefreshToken: string,
     jti: string,
     exp: number,
+    ctx: RequestContext,
   ) {
     const tokenHash = hashToken(rawRefreshToken);
     await this.refreshTokenRepository.update(
@@ -203,13 +207,10 @@ export class AuthService {
     if (ttl > 0) {
       await this.redisService.set(`bl:${jti}`, '1', ttl);
     }
-    await this.logEvent(AuthEventType.LOGOUT, userId, {
-      ip: '',
-      userAgent: '',
-    });
+    await this.logEvent(AuthEventType.LOGOUT, userId, ctx);
   }
 
-  async logoutAll(userId: number) {
+  async logoutAll(userId: number, ctx: RequestContext) {
     await this.refreshTokenRepository.update(
       {
         userId,
@@ -217,14 +218,7 @@ export class AuthService {
       },
       { revoked: true, revokedAt: new Date() },
     );
-    await this.logEvent(AuthEventType.LOGOUT_ALL, userId, {
-      ip: '',
-      userAgent: '',
-    });
-  }
-
-  decodeToken(token: string) {
-    return this.jwtService.decode(token) as JwtPayload & { exp: number,jti: string };
+    await this.logEvent(AuthEventType.LOGOUT_ALL, userId, ctx);
   }
 
   private async logEvent(
@@ -274,7 +268,7 @@ export class AuthService {
 
     return {
       accessToken,
-      RefreshToken: rawRefreshToken,
+      refreshToken: rawRefreshToken,
       expiresIn: this.accessTokenTtl,
     };
   }

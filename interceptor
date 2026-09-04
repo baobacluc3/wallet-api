@@ -1,0 +1,14 @@
+Completed the production-ready NestJS request pipeline.
+
+  - Middleware, global validation, exception filter, logging interceptor, JWT/roles/ownership guards, and custom decorators are cleanly separated and registered appropriately.
+  - GET /wallets/:id/verify is now a realistic admin-only reconciliation endpoint; wallet mutation routes remain owner-guarded.
+  - Logout now uses verified JWT identity only—no raw-token re-decoding or any types.
+  - Token responses consistently use refreshToken; validation errors retain safe field details.
+  - Added guard/JWT/filter coverage and documented the pipeline in the README.
+
+  Verified successfully:
+
+  npm run build
+  npm test -- --runInBand
+
+  Result: 5 test suites, 18 tests passing.
