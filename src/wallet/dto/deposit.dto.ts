@@ -6,14 +6,15 @@ import {
   IsString,
   Length,
 } from 'class-validator';
+import { PrimaryGeneratedColumn } from 'typeorm';
 
 export class DepositDto {
-  @IsUUID()
-  walletId: string;
+  @PrimaryGeneratedColumn()
+  walletId: number;
 
   @IsInt({ message: 'Amount must be an integer (cents)' })
   @Min(1, { message: 'Amount must be greater than zero' })
-  amountCents: number;
+  amountCents: string;
 
   @IsOptional()
   @IsString()
