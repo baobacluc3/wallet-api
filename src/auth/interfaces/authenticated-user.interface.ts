@@ -6,6 +6,7 @@ export interface AuthenticatedUser {
   email: string;
   role: Role;
   jti: string;
+  sessionId: string;
   /** Unix timestamp taken from the JWT after Passport has verified it. */
   expiresAt: number;
 }

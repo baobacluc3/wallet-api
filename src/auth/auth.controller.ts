@@ -16,6 +16,7 @@ import { Throttle } from '@nestjs/throttler';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { CurrentUser } from './decorators/current-user.decorator';
 import type { AuthenticatedUser } from './interfaces/authenticated-user.interface';
+import { ChangePasswordDto } from './dto/change-password.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -44,34 +45,44 @@ export class AuthController {
     return this.authService.refresh(dto.refreshToken, ctx);
   }
 
-  // The global JWT guard protects this route and attaches req.user.
+  // The global JWT guard protects this route and attaches req.user. Session
+  // identity comes from the access token; clients never need to re-submit a
+  // long-lived refresh token just to sign out.
   @Post('logout')
-  @HttpCode(HttpStatus.OK)
-  logout(
-    @Body() dto: RefreshTokenDto,
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async logout(
     @CurrentUser() user: AuthenticatedUser,
     @ClientCtx() ctx: RequestContext,
-  ) {
-    return this.authService.logout(
-      user.id,
-      dto.refreshToken,
-      user.jti,
-      user.expiresAt,
-      ctx,
-    );
+  ): Promise<void> {
+    await this.authService.logout(user.id, user.sessionId, ctx);
   }
 
   @Post('logout-all')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async logoutAll(
+    @CurrentUser() user: AuthenticatedUser,
+    @ClientCtx() ctx: RequestContext,
+  ): Promise<void> {
+    await this.authService.logoutAll(user.id, ctx);
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('change-password')
   @HttpCode(HttpStatus.OK)
-  logoutAll(
+  changePassword(
+    @Body() dto: ChangePasswordDto,
     @CurrentUser() user: AuthenticatedUser,
     @ClientCtx() ctx: RequestContext,
   ) {
-    return this.authService.logoutAll(user.id, ctx);
+    return this.authService.changePassword(user.id, dto, ctx);
   }
 
   @Get('me')
   me(@CurrentUser() user: AuthenticatedUser) {
-    return user;
+    return {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+    };
   }
 }

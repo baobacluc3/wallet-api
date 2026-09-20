@@ -12,12 +12,14 @@ import { Wallet } from '../../wallet/entities/wallet.entity';
 import { Role } from '../enums/role.enum';
 import { RefreshToken } from '../../auth/entities/refresh-token.entity';
 import { AuthEvent } from '../../auth/entities/auth-event.entity';
+import { AuthSession } from '../../auth/entities/auth-session.entity';
 
 @Entity('users')
 @Check(
   'CHK_users_failed_login_attempts_non_negative',
   '"failed_login_attempts" >= 0',
 )
+@Check('CHK_users_auth_version_positive', '"auth_version" > 0')
 export class User {
   @PrimaryGeneratedColumn()
   id: number;
@@ -54,6 +56,16 @@ export class User {
 
   @OneToMany(() => AuthEvent, (event) => event.user)
   authEvents: AuthEvent[];
+
+  @OneToMany(() => AuthSession, (session) => session.user)
+  authSessions: AuthSession[];
+
+  @Column({ name: 'is_active', type: 'boolean', default: true })
+  isActive: boolean;
+
+  /** Incrementing this invalidates every access token issued before it. */
+  @Column({ name: 'auth_version', type: 'integer', default: 1 })
+  authVersion: number;
 
   @Column({ name: 'locked_until', type: 'timestamptz', nullable: true })
   lockedUntil: Date | null;

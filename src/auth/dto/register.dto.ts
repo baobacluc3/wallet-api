@@ -1,17 +1,24 @@
-import { IsEmail, IsString, Matches, MinLength } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsEmail, IsNotEmpty, IsString, Matches, MaxLength } from 'class-validator';
+import { Password } from './password.validation';
 
 export class RegisterDto {
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim().toLowerCase() : value,
+  )
   @IsEmail()
+  @MaxLength(320)
   email: string;
 
-  @IsString()
-  @MinLength(10)
-  @Matches(/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/, {
-    message: 'Password must contain upper case, lower case, and a number',
-  })
+  @Password()
   password: string;
 
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
   @IsString()
-  @MinLength(2)
+  @IsNotEmpty()
+  @MaxLength(100)
+  @Matches(/\S/, { message: 'Name must contain a non-whitespace character' })
   name: string;
 }

@@ -8,6 +8,7 @@ import {
   PrimaryGeneratedColumn,
 } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
+import { AuthSession } from './auth-session.entity';
 
 @Entity('refresh_tokens')
 @Index('IDX_refresh_tokens_user_revoked', ['userId', 'revoked'])
@@ -23,6 +24,12 @@ export class RefreshToken {
 
   @Column({ name: 'family_id', type: 'uuid' })
   familyId: string; //A refresh-token family is a chain of tokens created from the same login session.
+
+  @ManyToOne(() => AuthSession, (session) => session.refreshTokens, {
+    onDelete: 'CASCADE',
+  })
+  @JoinColumn({ name: 'family_id' })
+  session: AuthSession;
 
   @ManyToOne(() => User, (user) => user.refreshTokens, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })

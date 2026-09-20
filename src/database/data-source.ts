@@ -2,11 +2,13 @@ import 'dotenv/config';
 import { DataSource, type DataSourceOptions } from 'typeorm';
 import { AuthEvent } from '../auth/entities/auth-event.entity';
 import { RefreshToken } from '../auth/entities/refresh-token.entity';
+import { AuthSession } from '../auth/entities/auth-session.entity';
 import { Transaction } from '../transaction/entities/transaction.entity';
 import { Transfer } from '../transfer/entities/transfer.entity';
 import { User } from '../users/entities/user.entity';
 import { Wallet } from '../wallet/entities/wallet.entity';
 import { CreateProductionSchema1736121600000 } from './migrations/1736121600000-CreateProductionSchema';
+import { AddAuthSessionSecurityState1736208000000 } from './migrations/1736208000000-AddAuthSessionSecurityState';
 
 const dataSourceOptions: DataSourceOptions = {
   type: 'postgres',
@@ -16,9 +18,23 @@ const dataSourceOptions: DataSourceOptions = {
   username: process.env.DB_USERNAME ?? 'postgres',
   password: process.env.DB_PASSWORD ?? 'postgres',
   database: process.env.DB_DATABASE ?? 'wallet_api',
-  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
-  entities: [User, Wallet, Transaction, Transfer, RefreshToken, AuthEvent],
-  migrations: [CreateProductionSchema1736121600000],
+  ssl:
+    process.env.DB_SSL === 'true'
+      ? { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false' }
+      : false,
+  entities: [
+    User,
+    Wallet,
+    Transaction,
+    Transfer,
+    RefreshToken,
+    AuthEvent,
+    AuthSession,
+  ],
+  migrations: [
+    CreateProductionSchema1736121600000,
+    AddAuthSessionSecurityState1736208000000,
+  ],
   synchronize: false,
 };
 

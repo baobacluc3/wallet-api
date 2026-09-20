@@ -11,6 +11,8 @@ import { AuthModule } from './auth/auth.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { RedisModule } from './redis/redis.module';
 import { CreateProductionSchema1736121600000 } from './database/migrations/1736121600000-CreateProductionSchema';
+import { AddAuthSessionSecurityState1736208000000 } from './database/migrations/1736208000000-AddAuthSessionSecurityState';
+import { validateEnvironment } from './config/environment.validation';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { RolesGuard } from './auth/guards/roles.guard';
@@ -22,6 +24,7 @@ import { RequestContextMiddleware } from './common/middleware/request-context.mi
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      validate: validateEnvironment,
     }),
     ThrottlerModule.forRoot([
       {
@@ -39,14 +42,21 @@ import { RequestContextMiddleware } from './common/middleware/request-context.mi
         username: configService.get<string>('DB_USERNAME', 'postgres'),
         password: configService.get<string>('DB_PASSWORD', 'postgres'),
         database: configService.get<string>('DB_DATABASE', 'wallet_api'),
-        ssl:
-          configService.get<string>('DB_SSL', 'false').toLowerCase() === 'true'
-            ? { rejectUnauthorized: false }
-            : false,
+        ssl: configService.get<boolean>('DB_SSL', false)
+          ? {
+              rejectUnauthorized: configService.get<boolean>(
+                'DB_SSL_REJECT_UNAUTHORIZED',
+                true,
+              ),
+            }
+          : false,
         autoLoadEntities: true,
         // Schema changes are reviewed migrations, never runtime synchronization.
         synchronize: false,
-        migrations: [CreateProductionSchema1736121600000],
+        migrations: [
+          CreateProductionSchema1736121600000,
+          AddAuthSessionSecurityState1736208000000,
+        ],
       }),
     }),
     UsersModule,
@@ -59,10 +69,11 @@ import { RequestContextMiddleware } from './common/middleware/request-context.mi
   controllers: [AppController],
   providers: [
     AppService,
-    // Authentication is opt-out via @Public(); authorization is opt-in via @Roles().
+    // Throttling runs before guards that touch persistence. Authentication is
+    // opt-out via @Public(); authorization is opt-in via @Roles().
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_FILTER, useClass: HttpExceptionFilter },
     { provide: APP_INTERCEPTOR, useClass: RequestLoggingInterceptor },
   ],
