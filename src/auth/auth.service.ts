@@ -23,6 +23,9 @@ import { JwtPayload } from './interfaces/jwt-payload.interface';
 import { generateOpaqueToken, hashToken } from './utils/token.util';
 import { JwtService } from '@nestjs/jwt';
 import { ThrottlerException } from '@nestjs/throttler';
+import { SessionMaterial, TokenPair } from './interfaces/auth-token.interface';
+import { AuthTokenService } from './services/auth-token.service';
+import { AuthSessionService } from './services/auth-session.service';
 
 const INVALID_CREDENTIALS_MESSAGE = 'Invalid email or password';
 const INVALID_REFRESH_TOKEN_MESSAGE = 'Invalid refresh token';
@@ -36,16 +39,16 @@ const ARGON2_OPTIONS: argon2.HashOptions = {
   hashLength: 32,
 };
 
-type SessionMaterial = {
-  sessionId: string;
-  rawRefreshToken: string;
-};
+// type SessionMaterial = {
+//   sessionId: string;
+//   rawRefreshToken: string;
+// };
 
-type TokenPair = {
-  accessToken: string;
-  refreshToken: string;
-  expiresIn: number;
-};
+// type TokenPair = {
+//   accessToken: string;
+//   refreshToken: string;
+//   expiresIn: number;
+// };
 
 type RefreshOutcome =
   | { kind: 'issued'; user: User; material: SessionMaterial }
@@ -73,6 +76,8 @@ export class AuthService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly configService: ConfigService,
     private readonly redisService: RedisService,
+    private readonly authTokenService: AuthTokenService,
+    private readonly authSessionService: AuthSessionService,
   ) {
     this.accessTokenTtl = this.configService.getOrThrow<number>(
       'JWT_ACCESS_TOKEN_TTL',
@@ -145,7 +150,11 @@ export class AuthService {
             lockedUntil: null,
           }),
         );
-        const material = await this.createSession(manager, user, ctx);
+        const material = await this.authSessionService.createSession(
+          manager,
+          user,
+          ctx,
+        );
         await this.logEvent(manager, AuthEventType.REGISTER, user.id, ctx, {
           sessionId: material.sessionId,
         });
@@ -153,7 +162,7 @@ export class AuthService {
         return { user, material };
       });
 
-      return this.signTokenPair(issued.user, issued.material);
+      return this.authTokenService.signTokenPair(issued.user, issued.material);
     } catch (error) {
       if (this.isUniqueConstraintViolation(error)) {
         // The pre-check is only an optimization; the database index is the
@@ -207,7 +216,7 @@ export class AuthService {
       throw new UnauthorizedException(INVALID_CREDENTIALS_MESSAGE);
     }
 
-    return this.signTokenPair(issued.user, issued.material);
+    return this.authTokenService.signTokenPair(issued.user, issued.material);
   }
 
   async refresh(
@@ -293,9 +302,15 @@ export class AuthService {
 
         session.lastUsedAt = now;
         await manager.save(session);
-        await this.logEvent(manager, AuthEventType.TOKEN_ROTATED, user.id, ctx, {
-          sessionId: session.id,
-        });
+        await this.logEvent(
+          manager,
+          AuthEventType.TOKEN_ROTATED,
+          user.id,
+          ctx,
+          {
+            sessionId: session.id,
+          },
+        );
 
         return {
           kind: 'issued',
@@ -314,7 +329,7 @@ export class AuthService {
       throw new UnauthorizedException(INVALID_REFRESH_TOKEN_MESSAGE);
     }
 
-    return this.signTokenPair(outcome.user, outcome.material);
+    return this.authTokenService.signTokenPair(outcome.user, outcome.material);
   }
 
   async logout(
@@ -388,7 +403,12 @@ export class AuthService {
       await manager.save(user);
       await this.revokeAllSessions(manager, user.id, now);
 
-      const material = await this.createSession(manager, user, ctx, now);
+      const material = await this.authSessionService.createSession(
+        manager,
+        user,
+        ctx,
+        now,
+      );
       await this.logEvent(
         manager,
         AuthEventType.PASSWORD_CHANGED,
@@ -399,7 +419,7 @@ export class AuthService {
       return { user, material };
     });
 
-    return this.signTokenPair(issued.user, issued.material);
+    return this.authTokenService.signTokenPair(issued.user, issued.material);
   }
 
   private async completeSuccessfulLogin(
@@ -434,7 +454,12 @@ export class AuthService {
     user.lockedUntil = null;
     await manager.save(user);
 
-    const material = await this.createSession(manager, user, ctx, now);
+    const material = await this.authSessionService.createSession(
+      manager,
+      user,
+      ctx,
+      now,
+    );
     await this.logEvent(manager, AuthEventType.LOGIN_SUCCESS, user.id, ctx, {
       sessionId: material.sessionId,
     });
@@ -478,47 +503,47 @@ export class AuthService {
     }
   }
 
-  private async createSession(
-    manager: EntityManager,
-    user: User,
-    ctx: RequestContext,
-    now = new Date(),
-  ): Promise<SessionMaterial> {
-    await this.enforceSessionLimit(manager, user.id, now);
+  // private async createSession(
+  //   manager: EntityManager,
+  //   user: User,
+  //   ctx: RequestContext,
+  //   now = new Date(),
+  // ): Promise<SessionMaterial> {
+  //   await this.enforceSessionLimit(manager, user.id, now);
 
-    const sessionId = randomUUID();
-    const expiresAt = new Date(
-      now.getTime() + this.refreshTokenTtlDays * 24 * 60 * 60 * 1000,
-    );
-    const rawRefreshToken = generateOpaqueToken();
-    await manager.save(
-      manager.create(AuthSession, {
-        id: sessionId,
-        userId: user.id,
-        expiresAt,
-        lastUsedAt: now,
-        revoked: false,
-        revokedAt: null,
-        ip: ctx.ip,
-        userAgent: ctx.userAgent,
-      }),
-    );
-    await manager.save(
-      manager.create(RefreshToken, {
-        tokenHash: hashToken(rawRefreshToken),
-        familyId: sessionId,
-        userId: user.id,
-        expiresAt,
-        revoked: false,
-        revokedAt: null,
-        replacedByTokenId: null,
-        ip: ctx.ip,
-        userAgent: ctx.userAgent,
-      }),
-    );
+  //   const sessionId = randomUUID();
+  //   const expiresAt = new Date(
+  //     now.getTime() + this.refreshTokenTtlDays * 24 * 60 * 60 * 1000,
+  //   );
+  //   const rawRefreshToken = generateOpaqueToken();
+  //   await manager.save(
+  //     manager.create(AuthSession, {
+  //       id: sessionId,
+  //       userId: user.id,
+  //       expiresAt,
+  //       lastUsedAt: now,
+  //       revoked: false,
+  //       revokedAt: null,
+  //       ip: ctx.ip,
+  //       userAgent: ctx.userAgent,
+  //     }),
+  //   );
+  //   await manager.save(
+  //     manager.create(RefreshToken, {
+  //       tokenHash: hashToken(rawRefreshToken),
+  //       familyId: sessionId,
+  //       userId: user.id,
+  //       expiresAt,
+  //       revoked: false,
+  //       revokedAt: null,
+  //       replacedByTokenId: null,
+  //       ip: ctx.ip,
+  //       userAgent: ctx.userAgent,
+  //     }),
+  //   );
 
-    return { sessionId, rawRefreshToken };
-  }
+  //   return { sessionId, rawRefreshToken };
+  // }
 
   private async enforceSessionLimit(
     manager: EntityManager,
@@ -635,25 +660,25 @@ export class AuthService {
     });
   }
 
-  private signTokenPair(user: User, material: SessionMaterial): TokenPair {
-    const payload: JwtPayload = {
-      sub: user.id,
-      email: user.email,
-      role: user.role,
-      jti: randomUUID(),
-      sid: material.sessionId,
-      ver: user.authVersion,
-    };
-    const accessToken = this.jwtService.sign(payload, {
-      expiresIn: this.accessTokenTtl,
-    });
+  // private signTokenPair(user: User, material: SessionMaterial): TokenPair {
+  //   const payload: JwtPayload = {
+  //     sub: user.id,
+  //     email: user.email,
+  //     role: user.role,
+  //     jti: randomUUID(),
+  //     sid: material.sessionId,
+  //     ver: user.authVersion,
+  //   };
+  //   const accessToken = this.jwtService.sign(payload, {
+  //     expiresIn: this.accessTokenTtl,
+  //   });
 
-    return {
-      accessToken,
-      refreshToken: material.rawRefreshToken,
-      expiresIn: this.accessTokenTtl,
-    };
-  }
+  //   return {
+  //     accessToken,
+  //     refreshToken: material.rawRefreshToken,
+  //     expiresIn: this.accessTokenTtl,
+  //   };
+  // }
 
   private async hashPassword(password: string): Promise<string> {
     return argon2.hash(password, ARGON2_OPTIONS);
