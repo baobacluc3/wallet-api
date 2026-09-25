@@ -1,5 +1,4 @@
 import {
-  Check,
   Column,
   CreateDateColumn,
   Entity,
@@ -32,22 +31,6 @@ export enum TransactionStatus {
 }
 
 @Entity('transactions')
-@Check('CHK_transactions_amount_positive', '"amount_cents" > 0')
-@Check(
-  'CHK_transactions_balance_non_negative',
-  '"balance_before_cents" >= 0 AND "balance_after_cents" >= 0',
-)
-@Check(
-  'CHK_transactions_balance_transition',
-  `(
-    "status" = 'COMPLETED' AND (
-      ("type" IN ('CREDIT', 'TRANSFER_IN') AND "balance_after_cents" = "balance_before_cents" + "amount_cents") OR
-      ("type" IN ('DEBIT', 'TRANSFER_OUT') AND "balance_after_cents" = "balance_before_cents" - "amount_cents")
-    )
-  ) OR (
-    "status" <> 'COMPLETED' AND "balance_after_cents" = "balance_before_cents"
-  )`,
-)
 @Index('IDX_transactions_wallet_created_at', ['walletId', 'createdAt'])
 @Index('IDX_transactions_wallet_type_created_at', [
   'walletId',

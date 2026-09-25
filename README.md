@@ -1,114 +1,53 @@
 # Wallet API
 
-A NestJS wallet backend built to demonstrate production-minded backend
-fundamentals without turning a junior portfolio project into a bank core:
-authentication, authorization, transactional money movements, audit data, and
-an indexed transaction-history API.
+A small NestJS backend for practicing authentication, relational data, and wallet transactions.
 
 ## Stack
 
-- NestJS, TypeORM, PostgreSQL, Redis
-- Argon2id password hashing and JWT access tokens
-- Refresh-token rotation with token-family reuse detection
-- Swagger at `GET /api/docs`
+- NestJS and TypeScript
+- PostgreSQL and TypeORM migrations
+- JWT authentication
+- Swagger at `/api/docs`
 
-## Request pipeline
+## Run locally
 
-The cross-cutting concerns are deliberately small and live in `src/common` or
-the owning `auth` module rather than in controllers and services:
+1. Create a PostgreSQL database named `wallet_api`.
+2. Copy `.env.example` to `.env` and set a private `JWT_SECRET`.
+3. Install dependencies and create the tables:
 
-- `RequestContextMiddleware` assigns or validates `X-Request-Id`, captures
-  request metadata, and returns the correlation ID to the client.
-- Global `JwtAuthGuard` makes endpoints private by default; `@Public()` is
-  used only for the health and credential endpoints. `RolesGuard` enforces
-  `@Roles(...)` metadata only on routes that declare a role requirement (the
-  wallet reconciliation endpoint is administrator-only), and
-  `WalletOwnerGuard` is applied only to commands that mutate a specific wallet.
-- Global validation rejects unknown input and transforms validated DTOs.
-  `ParsePositiveIntPipe` is reserved for wallet route IDs, where its strict
-  integer semantics add value beyond generic DTO validation.
-- `RequestLoggingInterceptor` adds `Cache-Control: no-store` and records
-  completed request timing with the correlation ID. `HttpExceptionFilter`
-  provides one client-safe error shape and never exposes unexpected exception
-  details.
-- `@CurrentUser()`, `@ClientCtx()`, `@Public()`, and `@Roles()` keep handlers
-  declarative without hiding business rules in decorators.
+   ```sh
+   npm install
+   npm run migration:run
+   npm run start:dev
+   ```
 
-The lifecycle is middleware → guards → interceptor → pipes/controller →
-interceptor response; exceptions are normalized by the filter. Unit tests cover
-the strict pipe, error filter, roles guard, JWT identity mapping, and wallet
-history access rules.
+The included migration creates the schema for a new database. If you already
+ran the old migrations, use a fresh development database before starting this
+simplified version.
 
-## Database design
+## Main routes
 
-The schema uses PostgreSQL and stores monetary values as **integer minor units**
-(for example, cents). It deliberately does not use JavaScript floating point for
-money.
+| Method | Route | Description |
+| --- | --- | --- |
+| `POST` | `/auth/register` | Create an account and receive an access token |
+| `POST` | `/auth/login` | Sign in and receive an access token |
+| `GET` | `/auth/me` | Get the current account |
+| `POST` | `/wallets` | Create a wallet (currency defaults to USD) |
+| `POST` | `/wallets/deposit` | Add cents to a wallet |
+| `POST` | `/wallets/withdraw` | Withdraw cents from a wallet |
+| `POST` | `/wallets/transfers` | Transfer cents between wallets |
+| `GET` | `/wallets/:id/transactions` | View a wallet's paginated history |
 
-| Table            | Purpose                                   | Important guarantees                                                                 |
-| ---------------- | ----------------------------------------- | ------------------------------------------------------------------------------------ |
-| `users`          | Accounts and lockout state                | Case-insensitive unique email, hidden password hash, timestamps                      |
-| `wallets`        | One wallet per user                       | Non-negative balance, ISO-4217 currency check, optimistic version column             |
-| `transactions`   | Append-only wallet ledger                 | Balance snapshots, positive amount and balance-transition checks, scoped idempotency |
-| `transfers`      | Links the debit and credit ledger entries | Different source/destination wallets, positive amount, idempotency key               |
-| `refresh_tokens` | Rotating sessions                         | Hashed token only, family/revocation indexes, replacement lineage                    |
-| `auth_events`    | Security audit trail                      | Indexed user/type timelines, IP, user agent, structured metadata                     |
+Send the token from register or login as `Authorization: Bearer <token>` for
+protected routes. Create a wallet before making a deposit or withdrawal. Tokens
+expire after one hour; log in again to get another. Amounts are integer cents,
+so the API avoids floating-point money calculations.
 
-Foreign keys intentionally use `RESTRICT` for financial ledger data, so a
-wallet or user cannot be removed while its money/audit history still exists.
+## Topics to explain in an interview
 
-## Setup
-
-1. Create a PostgreSQL database and (for full logout/token-revocation support)
-   a Redis instance.
-2. Copy `.env.example` to `.env` and set `DATABASE_URL` or the `DB_*` values,
-   `REDIS_URL`, and a long random `JWT_SECRET`.
-   For local development without Redis, set `REDIS_ENABLED=false`; revoked
-   access tokens will not be blacklisted until Redis is enabled.
-3. Install dependencies and apply the schema:
-
-```bash
-npm install
-npm run migration:run
-npm run start:dev
-```
-
-The Swagger UI is available at `http://localhost:3000/api/docs`.
-
-> The included migration is a **baseline for a fresh database**. If a database
-> was previously created using TypeORM `synchronize`, create and review a
-> one-off upgrade migration before deploying; do not apply the baseline over
-> existing data.
-
-## Useful commands
-
-```bash
-npm run build
-npm test -- --runInBand
-npm run migration:run
-npm run migration:revert
-```
-
-## Transaction history
-
-Only the wallet owner can access the endpoint below:
-
-```http
-GET /wallets/:id/transactions?page=1&limit=20&type=transfer&sortBy=createdAt&sortOrder=desc
-Authorization: Bearer <access-token>
-```
-
-Supported filters are `type=deposit|withdraw|transfer`, `fromDate`, and
-`toDate`. The response contains `{ data, meta }` and uses indexed TypeORM
-queries for pagination.
-
-## Design choices to discuss in an interview
-
-- Pessimistic row locks protect concurrent withdrawals and transfers.
-- Transfers lock wallets in numeric order to reduce deadlocks.
-- The database, not just the API, rejects negative balances, invalid currency
-  codes, invalid ledger transitions, and duplicate idempotency keys.
-- Refresh tokens are stored only as SHA-256 hashes; a reused rotated token
-  revokes its whole token family.
-- Migrations are reviewed and run by deployment tooling. Runtime schema
-  synchronization is disabled in every environment.
+- Why passwords are stored as hashes rather than plain text.
+- How JWT authentication and wallet ownership checks work.
+- Why database transactions keep a transfer's debit and credit together.
+- How row locks prevent concurrent withdrawals from spending the same balance.
+- Why money amounts use integer cents instead of decimals or floating point.
+- How pagination and filters are applied to transaction history.

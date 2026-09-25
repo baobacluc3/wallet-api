@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -38,11 +39,21 @@ export class WalletService {
     private dataSource: DataSource,
   ) {}
 
+  async createWallet(userId: number, currency = 'USD') {
+    const existingWallet = await this.walletRepo.findOne({ where: { userId } });
+    if (existingWallet) {
+      throw new ConflictException('This user already has a wallet');
+    }
+
+    const wallet = this.walletRepo.create({ userId, currency });
+    return this.walletRepo.save(wallet);
+  }
+
   async deposit(dto: DepositDto) {
     if (dto.idempotencyKey) {
       const existing = await this.transactionRepo.findOne({
         where: { walletId: dto.walletId, idempotencyKey: dto.idempotencyKey },
-        relations: { wallet: true }, //When find the Transaction, also load its related Wallet
+        relations: { wallet: true },
       });
       if (existing) {
         this.logger.warn(`Idempotent replay detected: ${dto.idempotencyKey}`);
@@ -437,31 +448,6 @@ export class WalletService {
         limit: query.limit,
         totalPages: Math.ceil(total / query.limit),
       },
-    };
-  }
-
-  async verifyBalance(walletId: number) {
-    const wallet = await this.walletRepo.findOne({ where: { id: walletId } });
-    if (!wallet) throw new NotFoundException('Wallet not found');
-
-    const result = await this.transactionRepo
-      .createQueryBuilder('t')
-      .select(
-        `SUM(CASE WHEN t.type IN ('CREDIT', 'TRANSFER_IN') THEN t.amount_cents
-                WHEN t.type IN ('DEBIT', 'TRANSFER_OUT') THEN -t.amount_cents
-                ELSE 0 END)`,
-        'computed',
-      )
-      .where('t.wallet_id = :walletId', { walletId })
-      .andWhere('t.status = :status', { status: 'COMPLETED' })
-      .getRawOne();
-
-    const computedBalance = Number(result.computed ?? 0);
-
-    return {
-      storedBalanceCents: wallet.balanceCents,
-      computedBalance,
-      consistent: wallet.balanceCents === computedBalance,
     };
   }
 

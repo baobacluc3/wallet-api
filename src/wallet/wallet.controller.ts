@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Get,
   Param,
+  ParseIntPipe,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -22,6 +23,7 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { DepositDto } from './dto/deposit.dto';
+import { CreateWalletDto } from './dto/create-wallet.dto';
 import { WalletService } from './wallet.service';
 import { WithdrawDto } from './dto/withdraw.dto';
 import { TransferDto } from './dto/transfer.dto';
@@ -34,14 +36,19 @@ import {
 import { TransactionHistoryResponseDto } from '../transaction/dto/transaction-history-response.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { WalletOwnerGuard } from '../auth/guards/wallet-owner.guard';
-import { ParsePositiveIntPipe } from '../common/pipes/parse-positive-int.pipe';
-import { Roles } from '../auth/decorators/roles.decorator';
-import { Role } from '../users/enums/role.enum';
 
 @ApiTags('Wallets')
 @Controller('wallets')
 export class WalletsController {
   constructor(private readonly walletService: WalletService) {}
+
+  @Post()
+  async createWallet(
+    @Body() dto: CreateWalletDto,
+    @CurrentUser('id') userId: number,
+  ) {
+    return this.walletService.createWallet(userId, dto.currency);
+  }
 
   @UseGuards(WalletOwnerGuard)
   @Post('deposit')
@@ -112,22 +119,11 @@ export class WalletsController {
   @ApiNotFoundResponse({ description: 'Wallet does not exist.' })
   @Get(':id/transactions')
   async getTransactions(
-    @Param('id', ParsePositiveIntPipe) walletId: number,
+    @Param('id', ParseIntPipe) walletId: number,
     @Query() query: GetTransactionsDto,
     @CurrentUser('id') userId: number,
   ) {
     return this.walletService.getTransactions(walletId, userId, query);
   }
 
-  @ApiBearerAuth()
-  @ApiOperation({
-    summary: 'Reconcile a wallet balance (administrator only)',
-    description:
-      'Compares the stored balance against completed ledger entries for operational investigation.',
-  })
-  @Roles(Role.ADMIN)
-  @Get(':id/verify')
-  async verify(@Param('id', ParsePositiveIntPipe) walletId: number) {
-    return this.walletService.verifyBalance(walletId);
-  }
 }

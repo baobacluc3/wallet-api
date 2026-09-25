@@ -1,40 +1,21 @@
 import {
-  Check,
   Column,
   CreateDateColumn,
   Entity,
-  OneToMany,
   OneToOne,
   PrimaryGeneratedColumn,
-  UpdateDateColumn,
 } from 'typeorm';
 import { Wallet } from '../../wallet/entities/wallet.entity';
-import { Role } from '../enums/role.enum';
-import { RefreshToken } from '../../auth/entities/refresh-token.entity';
-import { AuthEvent } from '../../auth/entities/auth-event.entity';
-import { AuthSession } from '../../auth/entities/auth-session.entity';
 
 @Entity('users')
-@Check(
-  'CHK_users_failed_login_attempts_non_negative',
-  '"failed_login_attempts" >= 0',
-)
-@Check('CHK_users_auth_version_positive', '"auth_version" > 0')
 export class User {
   @PrimaryGeneratedColumn()
   id: number;
 
-  // Emails are normalised to lowercase by AuthService; the migration also adds
-  // a case-insensitive unique index as the final protection against duplicates.
-  @Column({ type: 'varchar', length: 320 })
+  @Column({ type: 'varchar', length: 320, unique: true })
   email: string;
 
-  @Column({
-    name: 'password_hash',
-    type: 'varchar',
-    length: 255,
-    select: false,
-  })
+  @Column({ name: 'password_hash', type: 'varchar', select: false })
   passwordHash: string;
 
   @Column({ type: 'varchar', length: 100 })
@@ -43,39 +24,6 @@ export class User {
   @OneToOne(() => Wallet, (wallet) => wallet.user)
   wallet: Wallet;
 
-  @Column({
-    type: 'enum',
-    enum: Role,
-    enumName: 'user_role_enum',
-    default: Role.USER,
-  })
-  role: Role;
-
-  @OneToMany(() => RefreshToken, (token) => token.user)
-  refreshTokens: RefreshToken[];
-
-  @OneToMany(() => AuthEvent, (event) => event.user)
-  authEvents: AuthEvent[];
-
-  @OneToMany(() => AuthSession, (session) => session.user)
-  authSessions: AuthSession[];
-
-  @Column({ name: 'is_active', type: 'boolean', default: true })
-  isActive: boolean;
-
-  /** Incrementing this invalidates every access token issued before it. */
-  @Column({ name: 'auth_version', type: 'integer', default: 1 })
-  authVersion: number;
-
-  @Column({ name: 'locked_until', type: 'timestamptz', nullable: true })
-  lockedUntil: Date | null;
-
-  @Column({ name: 'failed_login_attempts', type: 'integer', default: 0 })
-  failedLoginAttempts: number;
-
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
-
-  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
-  updatedAt: Date;
 }

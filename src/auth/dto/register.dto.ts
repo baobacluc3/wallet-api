@@ -1,6 +1,5 @@
 import { Transform } from 'class-transformer';
-import { IsEmail, IsNotEmpty, IsString, Matches, MaxLength } from 'class-validator';
-import { Password } from './password.validation';
+import { IsEmail, IsNotEmpty, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class RegisterDto {
   @Transform(({ value }) =>
@@ -10,7 +9,9 @@ export class RegisterDto {
   @MaxLength(320)
   email: string;
 
-  @Password()
+  @IsString()
+  @MinLength(8)
+  @MaxLength(128)
   password: string;
 
   @Transform(({ value }) =>
@@ -19,6 +20,5 @@ export class RegisterDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(100)
-  @Matches(/\S/, { message: 'Name must contain a non-whitespace character' })
   name: string;
 }
